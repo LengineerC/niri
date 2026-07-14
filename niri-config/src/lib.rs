@@ -1823,6 +1823,7 @@ mod tests {
                 min_scale: 0.08,
                 focused_column_scale: 1.04,
                 grid_all_monitors: true,
+                default_mod_action: true,
             },
             magnifier: Magnifier {
                 off: false,
