@@ -29,6 +29,8 @@ struct TestWindowInner {
     bbox: Cell<Rectangle<i32, Logical>>,
     initial_bbox: Rectangle<i32, Logical>,
     requested_size: Cell<Option<Size<i32, Logical>>>,
+    // Emulates a configure that the window hasn't responded to yet.
+    pending_configure: Cell<bool>,
     // Emulates the window ignoring the compositor-provided size.
     forced_size: Cell<Option<Size<i32, Logical>>>,
     min_size: Size<i32, Logical>,
@@ -82,6 +84,7 @@ impl TestWindow {
             bbox: Cell::new(params.bbox),
             initial_bbox: params.bbox,
             requested_size: Cell::new(None),
+            pending_configure: Cell::new(false),
             forced_size: Cell::new(None),
             min_size: params.min_max_size.0,
             max_size: params.min_max_size.1,
@@ -132,6 +135,7 @@ impl TestWindow {
         }
 
         self.0.animate_next_configure.set(false);
+        self.0.pending_configure.set(false);
 
         if self.0.sizing_mode.get() != self.0.pending_sizing_mode.get() {
             self.0.sizing_mode.set(self.0.pending_sizing_mode.get());
@@ -177,6 +181,7 @@ impl LayoutElement for TestWindow {
     ) {
         if self.0.requested_size.get() != Some(size) {
             self.0.requested_size.set(Some(size));
+            self.0.pending_configure.set(true);
             self.0.animate_next_configure.set(true);
         }
 
@@ -241,6 +246,29 @@ impl LayoutElement for TestWindow {
 
     fn requested_size(&self) -> Option<Size<i32, Logical>> {
         self.0.requested_size.get()
+    }
+
+    fn expected_size(&self) -> Option<Size<i32, Logical>> {
+        if self.sizing_mode().is_fullscreen() {
+            return None;
+        }
+
+        let current = self.size();
+
+        // Mimic Mapped: a requested size only counts while the configure is in flight; once the
+        // window responds (communicates), its own committed size wins.
+        if self.0.pending_configure.get() {
+            let mut requested = self.0.requested_size.get().unwrap_or_default();
+            if requested.w == 0 {
+                requested.w = current.w;
+            }
+            if requested.h == 0 {
+                requested.h = current.h;
+            }
+            return Some(requested);
+        }
+
+        Some(current)
     }
 
     fn is_windowed_fullscreen(&self) -> bool {
@@ -5423,6 +5451,9 @@ fn grid_new_column_insert_hint_does_not_span_wrapped_rows() {
         params.bbox = Rectangle::from_size(Size::from((800, 500)));
         ops.push(Op::AddWindow { params });
     }
+    for id in 1..=8 {
+        ops.push(Op::Communicate(id));
+    }
     ops.push(Op::ToggleGridOverview);
     ops.push(Op::CompleteAnimations);
     let layout = check_ops(ops);
@@ -5468,12 +5499,91 @@ fn grid_interactive_move_keeps_visual_scale_and_can_merge() {
     approx::assert_abs_diff_eq!(move_.visual_scale, visual_scale, epsilon = 0.001);
     approx::assert_abs_diff_eq!(move_.total_scale(1.), visual_scale, epsilon = 0.001);
 
+    // While the grab is ongoing, the focus belongs to the grabbed window itself, so that no
+    // other cell gets a spurious focus boost that would animate away on drop.
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .grid_overview()
+            .unwrap()
+            .grabbed_window,
+        Some(3),
+    );
+    assert_eq!(layout.grid_focused_window_id(), Some(3));
+
     layout.interactive_move_end(&3);
     layout.verify_invariants();
 
     assert_eq!(scrolling_column_ids(&layout), vec![vec![3, 1], vec![2]]);
     assert!(layout.is_grid_overview_open());
     assert_eq!(layout.grid_focused_window_id(), Some(3));
+    assert_eq!(
+        layout
+            .active_workspace()
+            .unwrap()
+            .grid_overview()
+            .unwrap()
+            .grabbed_window,
+        None,
+    );
+}
+
+#[test]
+fn grid_merge_insert_computes_final_targets_immediately() {
+    let mut ops = vec![Op::AddOutput(1)];
+    for id in 1..=3 {
+        let mut params = TestWindowParams::new(id);
+        params.bbox = Rectangle::from_size(Size::from((1600, 1200)));
+        ops.push(Op::AddWindow { params });
+        ops.push(Op::Communicate(id));
+    }
+    ops.push(Op::FocusWindow(1));
+    ops.push(Op::ToggleGridOverview);
+    ops.push(Op::CompleteAnimations);
+    let mut layout = check_ops(ops);
+
+    // Grab window 3 and merge it into window 1's column.
+    let (output, start, _) = grid_window_point(&layout, 3, 0.5, 0.5);
+    let (_, target, _) = grid_window_point(&layout, 1, 0.5, 0.25);
+    assert!(layout.interactive_move_begin(3, &output, start));
+    assert!(layout.interactive_move_update(&3, Point::from((300., 0.)), output.clone(), target));
+    layout.interactive_move_end(&3);
+    layout.verify_invariants();
+    assert_eq!(scrolling_column_ids(&layout), vec![vec![3, 1], vec![2]]);
+
+    let entry_targets = |layout: &Layout<TestWindow>| -> Vec<_> {
+        layout
+            .active_workspace()
+            .unwrap()
+            .grid_overview()
+            .unwrap()
+            .layout
+            .entries
+            .iter()
+            .map(|(_, info)| (info.target_pos, info.target_size, info.target_scale))
+            .collect()
+    };
+
+    // The targets computed at drop time must already account for the pending resizes of the
+    // merged column, so that the windows' subsequent commits don't shift every entry again
+    // (previously visible as all windows shaking once).
+    let targets_at_drop = entry_targets(&layout);
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::Communicate(1), Op::Communicate(2), Op::Communicate(3)],
+    );
+
+    let targets_after_commit = entry_targets(&layout);
+    assert_eq!(targets_at_drop.len(), targets_after_commit.len());
+    for (before, after) in targets_at_drop.iter().zip(&targets_after_commit) {
+        approx::assert_abs_diff_eq!(before.0.x, after.0.x, epsilon = 0.001);
+        approx::assert_abs_diff_eq!(before.0.y, after.0.y, epsilon = 0.001);
+        approx::assert_abs_diff_eq!(before.1.w, after.1.w, epsilon = 0.001);
+        approx::assert_abs_diff_eq!(before.1.h, after.1.h, epsilon = 0.001);
+        approx::assert_abs_diff_eq!(before.2, after.2, epsilon = 0.001);
+    }
 }
 
 #[test]

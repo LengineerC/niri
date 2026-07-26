@@ -111,6 +111,9 @@ pub struct GridOverview<W: LayoutElement> {
     pub rearrange_anim: Option<Animation>,
     pub previous_focus: Option<(usize, usize)>,
     pub focus_boost_anim: Option<Animation>,
+    /// While a window is interactively grabbed, the focus belongs to the grabbed window
+    /// itself, so no grid cell shows the focus boost.
+    pub grabbed_window: Option<W::Id>,
     added_window_ids: Vec<W::Id>,
     /// col_idx → tile_idx for Column items that have multiple tiles.
     pub column_tile_focus: Vec<(usize, usize)>,
@@ -135,6 +138,7 @@ impl<W: LayoutElement> GridOverview<W> {
             rearrange_anim: None,
             previous_focus: None,
             focus_boost_anim: None,
+            grabbed_window: None,
             added_window_ids: Vec::new(),
             column_tile_focus: Vec::new(),
             clock,
@@ -427,11 +431,12 @@ impl<W: LayoutElement> GridOverview<W> {
             .focused_column_scale
             .clamp(1., 2.);
         let base_boost = 1. + (configured_focus_boost - 1.) * self.progress_value().clamp(0., 1.);
-        let target_focus_boost = if self.focus == (info.row, info.col) {
-            base_boost
-        } else {
-            1.
-        };
+        let target_focus_boost =
+            if self.grabbed_window.is_none() && self.focus == (info.row, info.col) {
+                base_boost
+            } else {
+                1.
+            };
 
         let boost = if let Some(anim) = &self.focus_boost_anim {
             let from = Self::matching_value(&self.focus_boosts, item)
@@ -498,6 +503,26 @@ impl<W: LayoutElement> GridOverview<W> {
         self.focus = focus;
     }
 
+    pub fn set_grabbed_window(&mut self, id: Option<W::Id>) {
+        if self.grabbed_window == id {
+            return;
+        }
+
+        if self.open {
+            // Animate the focus boost changes caused by the grab state change.
+            self.snapshot_focus_boosts();
+            self.focus_boost_anim = Some(Animation::new(
+                self.clock.clone(),
+                0.,
+                1.,
+                0.,
+                self.options.animations.window_resize.anim,
+            ));
+        }
+
+        self.grabbed_window = id;
+    }
+
     pub fn set_focus_without_animation(&mut self, focus: (usize, usize)) {
         self.focus = focus;
         self.previous_focus = None;
@@ -522,25 +547,13 @@ impl<W: LayoutElement> GridOverview<W> {
     }
 
     fn snapshot_focus_boosts(&mut self) {
-        let configured_focus_boost = self
-            .options
-            .grid_overview
-            .focused_column_scale
-            .clamp(1., 2.);
-        let base_boost = 1. + (configured_focus_boost - 1.) * self.progress_value().clamp(0., 1.);
-
+        // Capture the current animated boost values, so that an in-progress transition
+        // continues smoothly from where it visually is rather than from its steady state.
         self.focus_boosts = self
             .layout
             .entries
             .iter()
-            .map(|(item, info)| {
-                let steady = if self.focus == (info.row, info.col) {
-                    base_boost
-                } else {
-                    1.
-                };
-                (item.clone(), steady)
-            })
+            .map(|(item, info)| (item.clone(), self.entry_focus_boost(item, info)))
             .collect();
     }
 

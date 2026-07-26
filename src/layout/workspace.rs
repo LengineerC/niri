@@ -499,8 +499,20 @@ impl<W: LayoutElement> Workspace<W> {
         self.grid_focused_window_id() != previous
     }
 
+    pub fn set_grid_grabbed_window(&mut self, id: Option<W::Id>) {
+        if let Some(go) = &mut self.grid_overview {
+            go.set_grabbed_window(id);
+        }
+    }
+
     pub fn grid_focused_window_id(&self) -> Option<W::Id> {
         let go = self.grid_overview.as_ref()?;
+
+        // While a grab is ongoing, the grabbed window itself is the focused one.
+        if let Some(id) = &go.grabbed_window {
+            return Some(id.clone());
+        }
+
         let item = go.focused_item()?;
         if let GridItem::Column {
             col_idx, window_id, ..
@@ -2665,7 +2677,12 @@ impl<W: LayoutElement> Workspace<W> {
                             return;
                         };
                         let grid_tile_idx = go.get_column_tile_focus(*col_idx);
-                        for preview_tile in preview.tiles {
+                        // Render lower tiles on top of upper ones. Tiles are anchored at their
+                        // top edge, so any transient overflow (e.g. a freshly merged-in window
+                        // still at its full pre-resize height) extends downwards; drawing the
+                        // lower neighbor above it hides the overflow, and the neighbor's top
+                        // edge cleanly reveals the new window as the sizes settle.
+                        for preview_tile in preview.tiles.into_iter().rev() {
                             let is_grid_focused = preview_tile.tile_idx == grid_tile_idx;
                             let target_tile_pos =
                                 visual_pos + preview_tile.pos.upscale(visual_scale);
@@ -3032,7 +3049,8 @@ impl<W: LayoutElement> Workspace<W> {
                                 self.scrolling.grid_preview_with_stable_origin(item)
                             {
                                 let rel = (pos - visual_pos).downscale(visual_scale.max(0.0001));
-                                for preview_tile in preview.tiles {
+                                // Match the render order: lower tiles draw on top of upper ones.
+                                for preview_tile in preview.tiles.into_iter().rev() {
                                     let tile_size = preview_tile.tile.animated_tile_size();
                                     let tile_rect = Rectangle::new(preview_tile.pos, tile_size);
                                     if tile_rect.contains(rel) {

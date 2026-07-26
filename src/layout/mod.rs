@@ -1158,6 +1158,7 @@ impl<W: LayoutElement> Layout<W> {
                         // Unlock the view on the workspaces.
                         for ws in self.workspaces_mut() {
                             ws.dnd_scroll_gesture_end();
+                            ws.set_grid_grabbed_window(None);
                         }
 
                         return Some(RemovedTile {
@@ -4488,6 +4489,16 @@ impl<W: LayoutElement> Layout<W> {
                 // in the middle of interactive_move_update() and the confusion that causes.
                 self.interactive_move = None;
 
+                // While the grab is ongoing, the grid focus follows the grabbed window itself:
+                // no grid cell shows the focus boost. Otherwise the focus would jump to some
+                // other cell on grab and back on drop, triggering spurious boost animations.
+                if self.is_grid_overview_open() {
+                    let grabbed = window_id.clone();
+                    for ws in self.workspaces_mut() {
+                        ws.set_grid_grabbed_window(Some(grabbed.clone()));
+                    }
+                }
+
                 // Unset fullscreen before removing the tile. This will restore its size properly,
                 // and move it to floating if needed, so we don't have to deal with that here.
                 let ws = self
@@ -4670,6 +4681,11 @@ impl<W: LayoutElement> Layout<W> {
         let Some(InteractiveMoveState::Moving(mut move_)) = self.interactive_move.take() else {
             unreachable!()
         };
+
+        // The grab is over; let the grid focus settle on the drop target normally.
+        for ws in self.workspaces_mut() {
+            ws.set_grid_grabbed_window(None);
+        }
 
         for mon in self.monitors_mut() {
             mon.dnd_scroll_gesture_end();

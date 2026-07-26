@@ -451,7 +451,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                             tile_idx,
                             window_id: tile.window().id().clone(),
                         },
-                        tile.tile_size(),
+                        tile.tile_expected_or_current_size(),
                     ));
                 }
             } else {
@@ -461,7 +461,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                         col_idx,
                         window_id: tile.window().id().clone(),
                     },
-                    col.grid_preview_size(),
+                    col.grid_preview_target_size(),
                 ));
             }
         }
@@ -521,7 +521,16 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let scale = self.scale;
         let view_off = Point::from((-view_pos, 0.));
         let col_off = Point::from((self.column_x(col_idx), 0.));
-        let col_render_off = col.render_offset();
+        // With a stable origin, exclude the column-level render offset: it represents
+        // horizontal view-space movement (column reorders, width changes of neighbors), which
+        // is meaningless within a grid entry and would make the entry's windows visibly slide
+        // sideways whenever some other column resizes. The non-stable variant keeps it, since
+        // it must match the real render positions.
+        let col_render_off = if stable_origin {
+            Point::from((0., 0.))
+        } else {
+            col.render_offset()
+        };
         let col_pos = view_off + col_off + col_render_off;
         let col_pos = col_pos.to_physical_precise_round(scale).to_logical(scale);
 
@@ -5734,25 +5743,29 @@ impl<W: LayoutElement> Column<W> {
         zip(&self.tiles, offsets)
     }
 
-    fn grid_preview_size(&self) -> Size<f64, Logical> {
-        let mut min_x = f64::MAX;
-        let mut min_y = f64::MAX;
-        let mut max_x = f64::MIN;
-        let mut max_y = f64::MIN;
+    fn grid_preview_target_size(&self) -> Size<f64, Logical> {
+        // Use expected sizes rather than current ones, so that pending resizes (e.g. right after
+        // a tile is added to, or removed from, the column) don't produce transient grid overview
+        // layouts that snap back once the clients commit.
+        let gaps = self.options.layout.gaps;
+        let tabbed = self.display_mode == ColumnDisplay::Tabbed;
 
-        for (tile, pos) in self.tiles() {
-            let size = tile.tile_size();
-            min_x = min_x.min(pos.x);
-            min_y = min_y.min(pos.y);
-            max_x = max_x.max(pos.x + size.w);
-            max_y = max_y.max(pos.y + size.h);
+        let mut width = 0.0_f64;
+        let mut height = 0.0_f64;
+        for (idx, tile) in self.tiles.iter().enumerate() {
+            let size = tile.tile_expected_or_current_size();
+            width = width.max(size.w);
+            if tabbed {
+                height = height.max(size.h);
+            } else {
+                if idx > 0 {
+                    height += gaps;
+                }
+                height += size.h;
+            }
         }
 
-        if min_x == f64::MAX {
-            return Size::from((1., 1.));
-        }
-
-        Size::from(((max_x - min_x).max(1.), (max_y - min_y).max(1.)))
+        Size::from((width.max(1.), height.max(1.)))
     }
 
     fn tiles_mut(&mut self) -> impl Iterator<Item = (&mut Tile<W>, Point<f64, Logical>)> + '_ {
