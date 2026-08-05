@@ -12,6 +12,57 @@ Alternatively, you can use tools that rely on the `wlr-screencopy` protocol, whi
 There are several features in niri designed for screencasting.
 Let's take a look!
 
+### Picker appearance
+
+The native screen cast picker has four optional color settings. They use the same [color syntax as the rest of the niri config](./Configuration:-Layout.md#colors). The defaults match the neutral dark gray and white palette of niri's screenshot UI.
+
+```kdl
+screen-cast-picker {
+    background-color "#1a1a1a"
+    accent-color "#ffffff"
+    text-color "#ffffff"
+    accent-text-color "#1a1a1a"
+    corner-radius 16
+}
+```
+
+Card surfaces, borders, hover and active states, secondary and disabled text, and the accent hover state are derived from these colors. The desktop backdrop remains 55% black. Changes apply on config reload, including while the picker is open.
+
+`corner-radius` sets the rounding of the picker panel's outer corners (default 16). Set it to the same value as your `geometry-corner-radius` window rule to keep the picker visually consistent with your windows.
+
+The picker remains visible in monitor screencasts that are already running. Windows protected by `block-out-from` use a black preview and generic title in that view, and display previews exclude the picker itself to avoid recursive previews.
+
+#### Matugen
+
+To follow a complete Matugen palette rather than only its light/dark mode, save the following as a Matugen template, for example at `~/.config/matugen/templates/niri-picker.kdl`:
+
+```jinja
+screen-cast-picker {
+    background-color "{{ colors.surface.default.hex }}"
+    accent-color "{{ colors.primary.default.hex }}"
+    text-color "{{ colors.on_surface.default.hex }}"
+    accent-text-color "{{ colors.on_primary.default.hex }}"
+}
+```
+
+Add it to `~/.config/matugen/config.toml`:
+
+```toml
+[config]
+
+[templates.niri-picker]
+input_path = "~/.config/matugen/templates/niri-picker.kdl"
+output_path = "~/.config/niri/matugen-picker.kdl"
+```
+
+Then include the generated output from the main niri config:
+
+```kdl
+include optional=true "~/.config/niri/matugen-picker.kdl"
+```
+
+Included files are watched for changes, so Matugen output triggers niri's normal live config reload without a post-hook.
+
 ### Block out windows
 
 You can block out specific windows from screencasts, replacing them with solid black rectangles.
