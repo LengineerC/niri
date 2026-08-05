@@ -4,8 +4,11 @@ The primary screencasting interface that niri offers is through portals and pipe
 It is supported by [OBS], Firefox, Chromium, Electron, Telegram, and other apps.
 You can screencast both monitors and individual windows.
 
-In order to use it, you need a working D-Bus session, pipewire, `xdg-desktop-portal-gnome`, and [running niri as a session](./Getting-Started.md) (i.e. through `niri-session` or from a display manager).
-On widely used distros this should all "just work".
+The ScreenCast and Screenshot portal backends are built into niri itself (`org.freedesktop.impl.portal.desktop.niri`), so no separate backend process such as `xdg-desktop-portal-gnome` is needed.
+In order to use it, you need a working D-Bus session, pipewire, `xdg-desktop-portal` (the portal broker), and [running niri as a session](./Getting-Started.md) (i.e. through `niri-session` or from a display manager).
+The niri package installs `niri.portal` and `niri-portals.conf`, which point the broker at the built-in backend; other portal interfaces (file chooser, etc.) can be provided by `xdg-desktop-portal-gtk`.
+
+Persisted screen cast permissions work through the portal `restore_token` mechanism: the first request from an app shows the picker, and later requests with a valid token restore monitor selections without prompting.
 
 Alternatively, you can use tools that rely on the `wlr-screencopy` protocol, which niri also supports.
 
