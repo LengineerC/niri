@@ -266,4 +266,10 @@ impl LayoutElement for TestWindow {
     fn is_urgent(&self) -> bool {
         false
     }
+
+    fn is_minimized(&self) -> bool {
+        false
+    }
+
+    fn set_minimized(&mut self, _minimized: bool) {}
 }

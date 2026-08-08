@@ -699,6 +699,24 @@ impl XdgShellHandler for State {
         }
     }
 
+    fn minimize_request(&mut self, toplevel: ToplevelSurface) {
+        // We advertise the minimize wm capability, so handle the client's request for real.
+        //
+        // No configure is required in response to set_minimized, but minimizing sends one anyway
+        // for the suspended state.
+        if let Some((mapped, _)) = self
+            .niri
+            .layout
+            .find_window_and_output(toplevel.wl_surface())
+        {
+            let window = mapped.window.clone();
+            self.minimize_window(&window);
+        }
+
+        // For unmapped windows the request is ignored: the initial map decides the window's state
+        // via the open-minimized window rule instead.
+    }
+
     fn unfullscreen_request(&mut self, toplevel: ToplevelSurface) {
         if let Some((mapped, _)) = self
             .niri

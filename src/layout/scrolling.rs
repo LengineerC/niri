@@ -98,6 +98,21 @@ pub struct ScrollingSpace<W: LayoutElement> {
     options: Rc<Options>,
 }
 
+/// Where a window sat in the scrolling layout at the moment it was minimized.
+///
+/// Used to restore the window near its old position even after other windows have moved.
+#[derive(Debug)]
+pub(super) struct MinimizeSnapshot<W: LayoutElement> {
+    /// Index of the column the window was in.
+    pub column_idx: usize,
+    /// Display mode of the column the window was in.
+    pub display_mode: ColumnDisplay,
+    /// Another tile in the same column, and whether the window was positioned before (above) it.
+    pub column_neighbor: Option<(W::Id, bool)>,
+    /// A window in the column to the left.
+    pub left_neighbor: Option<W::Id>,
+}
+
 niri_render_elements! {
     ScrollingSpaceRenderElement<R> => {
         Tile = TileRenderElement<R>,
@@ -488,6 +503,51 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         })
     }
 
+    pub fn has_window(&self, window: &W::Id) -> bool {
+        self.position_of(window).is_some()
+    }
+
+    /// Returns (column index, tile index within column) of the window.
+    pub fn position_of(&self, window: &W::Id) -> Option<(usize, usize)> {
+        self.columns
+            .iter()
+            .enumerate()
+            .find_map(|(col_idx, col)| col.position(window).map(|tile_idx| (col_idx, tile_idx)))
+    }
+
+    pub fn column_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    /// Captures where a window sits in the layout so it can be restored there after
+    /// being minimized.
+    pub(super) fn minimize_snapshot(&self, window: &W::Id) -> Option<MinimizeSnapshot<W>> {
+        let (col_idx, tile_idx) = self.position_of(window)?;
+        let col = &self.columns[col_idx];
+
+        let column_neighbor = if col.tiles.len() > 1 {
+            if tile_idx + 1 < col.tiles.len() {
+                Some((col.tiles[tile_idx + 1].window().id().clone(), true))
+            } else {
+                Some((col.tiles[tile_idx - 1].window().id().clone(), false))
+            }
+        } else {
+            None
+        };
+
+        let left_neighbor = col_idx
+            .checked_sub(1)
+            .map(|idx| &self.columns[idx])
+            .map(|col| col.tiles[col.active_tile_idx].window().id().clone());
+
+        Some(MinimizeSnapshot {
+            column_idx: col_idx,
+            display_mode: col.display_mode,
+            column_neighbor,
+            left_neighbor,
+        })
+    }
+
     pub fn grid_preview(&self, item: &GridItem<W>) -> Option<GridPreview<'_, W>> {
         self.grid_preview_at_view_pos(item, self.view_pos(), false)
     }
@@ -514,7 +574,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             GridItem::Tab {
                 col_idx, window_id, ..
             } => (*col_idx, Some(window_id)),
-            GridItem::Floating { .. } => return None,
+            GridItem::Floating { .. } | GridItem::Minimized { .. } => return None,
         };
 
         let col = self.columns.get(col_idx)?;
@@ -603,6 +663,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     pub fn grid_item_visible_when_closing(&self, item: &GridItem<W>) -> bool {
         match item {
             GridItem::Column { .. } | GridItem::Tab { .. } | GridItem::Floating { .. } => true,
+            GridItem::Minimized { .. } => false,
         }
     }
 
@@ -636,7 +697,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 let is_active = focused_window == Some(tile.window().id());
                 tile.update_render_elements(is_active, view_rect);
             }
-            GridItem::Floating { .. } => (),
+            // Minimized tiles are updated by the workspace, which owns them.
+            GridItem::Floating { .. } | GridItem::Minimized { .. } => (),
         }
     }
 
@@ -2595,6 +2657,25 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         };
 
         self.set_column_display(display);
+    }
+
+    /// Sets the display mode of the column at the given index.
+    ///
+    /// Used to restore the tabbed display mode when unminimizing a window into a fresh column.
+    pub(super) fn set_column_display_at(&mut self, col_idx: usize, display: ColumnDisplay) {
+        let Some(col) = self.columns.get_mut(col_idx) else {
+            return;
+        };
+        if col.display_mode == display {
+            return;
+        }
+
+        cancel_resize_for_column(&mut self.interactive_resize, col);
+        col.set_column_display(display);
+
+        // With place_within_column, the tab indicator changes the column size immediately.
+        self.data[col_idx].update(col);
+        col.update_tile_sizes(true);
     }
 
     pub fn set_column_display(&mut self, display: ColumnDisplay) {

@@ -26,6 +26,9 @@ pub enum GridItem<W: LayoutElement> {
     Floating {
         window_id: W::Id,
     },
+    Minimized {
+        window_id: W::Id,
+    },
 }
 
 impl<W: LayoutElement> Clone for GridItem<W> {
@@ -47,6 +50,9 @@ impl<W: LayoutElement> Clone for GridItem<W> {
             GridItem::Floating { window_id } => GridItem::Floating {
                 window_id: window_id.clone(),
             },
+            GridItem::Minimized { window_id } => GridItem::Minimized {
+                window_id: window_id.clone(),
+            },
         }
     }
 }
@@ -56,7 +62,8 @@ impl<W: LayoutElement> GridItem<W> {
         match self {
             GridItem::Column { window_id, .. }
             | GridItem::Tab { window_id, .. }
-            | GridItem::Floating { window_id } => window_id,
+            | GridItem::Floating { window_id }
+            | GridItem::Minimized { window_id } => window_id,
         }
     }
 
@@ -74,7 +81,10 @@ impl<W: LayoutElement> GridItem<W> {
         match (self, other) {
             (GridItem::Column { window_id: a, .. }, GridItem::Column { window_id: b, .. })
             | (GridItem::Tab { window_id: a, .. }, GridItem::Tab { window_id: b, .. })
-            | (GridItem::Floating { window_id: a }, GridItem::Floating { window_id: b }) => a == b,
+            | (GridItem::Floating { window_id: a }, GridItem::Floating { window_id: b })
+            | (GridItem::Minimized { window_id: a }, GridItem::Minimized { window_id: b }) => {
+                a == b
+            }
             _ => false,
         }
     }
@@ -90,6 +100,7 @@ impl<W: LayoutElement> PartialEq for GridItem<W> {
             (GridItem::Column { col_idx: a, .. }, GridItem::Column { col_idx: b, .. }) => a == b,
             (GridItem::Tab { window_id: a, .. }, GridItem::Tab { window_id: b, .. }) => a == b,
             (GridItem::Floating { window_id: a }, GridItem::Floating { window_id: b }) => a == b,
+            (GridItem::Minimized { window_id: a }, GridItem::Minimized { window_id: b }) => a == b,
             _ => false,
         }
     }

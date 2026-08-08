@@ -558,6 +558,7 @@ fn make_ipc_window(
         is_focused: mapped.is_focused(),
         is_floating: mapped.is_floating(),
         is_urgent: mapped.is_urgent(),
+        is_minimized: mapped.is_minimized(),
         layout,
         focus_timestamp: mapped.get_focus_timestamp().map(Timestamp::from),
     })
@@ -795,6 +796,11 @@ impl State {
             let urgent = mapped.is_urgent();
             if urgent != ipc_win.is_urgent {
                 events.push(Event::WindowUrgencyChanged { id, urgent })
+            }
+
+            let is_minimized = mapped.is_minimized();
+            if is_minimized != ipc_win.is_minimized {
+                events.push(Event::WindowMinimizedChanged { id, is_minimized })
             }
         });
 

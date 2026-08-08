@@ -185,6 +185,7 @@ use crate::ui::screenshot_ui::{
 };
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
+use crate::utils::transaction::Transaction;
 use crate::utils::vblank_throttle::VBlankThrottle;
 use crate::utils::watcher::Watcher;
 use crate::utils::xwayland::satellite::Satellite;
@@ -2563,6 +2564,62 @@ impl State {
         });
     }
 
+    /// Minimizes a window, playing the window-close animation for the disappearing tile.
+    pub fn minimize_window(&mut self, window: &Window) {
+        if self.niri.layout.is_window_minimized(window) {
+            return;
+        }
+
+        let surface = window.toplevel().expect("no X11 support").wl_surface();
+        let Some((_, output)) = self.niri.layout.find_window_and_output(surface) else {
+            return;
+        };
+        let output = output.cloned();
+
+        self.store_unmap_snapshot(window, output.as_ref());
+
+        let transaction = Transaction::new();
+        let blocker = transaction.blocker();
+        self.backend.with_primary_renderer(|renderer| {
+            self.niri
+                .layout
+                .start_close_animation_for_window(renderer, window, blocker);
+        });
+
+        let active_window = self.niri.layout.focus().map(|m| &m.window);
+        let was_active = active_window == Some(window);
+
+        self.niri.layout.set_window_minimized(window, true);
+
+        if !transaction.is_last() {
+            transaction.register_deadline_timer(&self.niri.event_loop);
+        }
+
+        if was_active {
+            self.maybe_warp_cursor_to_focus();
+        }
+
+        // FIXME: granular.
+        self.niri.queue_redraw_all();
+    }
+
+    /// Restores a minimized window, optionally focusing it.
+    pub fn unminimize_window(&mut self, window: &Window, activate: bool) {
+        if !self.niri.layout.is_window_minimized(window) {
+            return;
+        }
+
+        self.niri.layout.unminimize_window(window, activate);
+
+        if activate {
+            self.niri.layer_shell_on_demand_focus = None;
+            self.maybe_warp_cursor_to_focus();
+        }
+
+        // FIXME: granular.
+        self.niri.queue_redraw_all();
+    }
+
     #[cfg(not(feature = "xdp-gnome-screencast"))]
     pub fn set_dynamic_cast_target(&mut self, _target: CastTarget) {}
 
@@ -2855,7 +2912,11 @@ impl Niri {
         let compositor_state = CompositorState::new_v6::<State>(&display_handle);
         let xdg_shell_state = XdgShellState::new_with_capabilities::<State>(
             &display_handle,
-            [WmCapabilities::Fullscreen, WmCapabilities::Maximize],
+            [
+                WmCapabilities::Fullscreen,
+                WmCapabilities::Maximize,
+                WmCapabilities::Minimize,
+            ],
         );
         let xdg_decoration_state =
             XdgDecorationState::new_with_filter::<State, _>(&display_handle, |client| {
@@ -6429,9 +6490,22 @@ impl Niri {
 
         let frame_callback_time = get_monotonic_time();
 
+        // While the grid overview is open, minimized windows show live previews in it, so they
+        // need frame callbacks despite not being part of any output's scanout.
+        let minimized_grid_previews = self.layout.is_grid_overview_open_on(output);
+
         for mapped in self.layout.windows_for_output_mut(output) {
             #[cfg(feature = "xdp-gnome-screencast")]
             if picker_display_preview || picker_window_previews.contains(&mapped.id().get()) {
+                mapped.send_frame(
+                    output,
+                    frame_callback_time,
+                    Some(PREVIEW_FRAME_INTERVAL),
+                    |_, _| None,
+                );
+                continue;
+            }
+            if minimized_grid_previews && mapped.is_minimized() {
                 mapped.send_frame(
                     output,
                     frame_callback_time,

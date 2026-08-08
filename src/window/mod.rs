@@ -70,6 +70,9 @@ pub struct ResolvedWindowRules {
     /// Whether the window should open floating.
     pub open_floating: Option<bool>,
 
+    /// Whether the window should open minimized.
+    pub open_minimized: Option<bool>,
+
     /// Whether the window should open focused.
     pub open_focused: Option<bool>,
 
@@ -254,6 +257,10 @@ impl ResolvedWindowRules {
 
                 if let Some(x) = rule.open_floating {
                     resolved.open_floating = Some(x);
+                }
+
+                if let Some(x) = rule.open_minimized {
+                    resolved.open_minimized = Some(x);
                 }
 
                 if let Some(x) = rule.open_focused {

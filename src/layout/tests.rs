@@ -40,6 +40,7 @@ struct TestWindowInner {
     sizing_mode: Cell<SizingMode>,
     is_windowed_fullscreen: Cell<bool>,
     is_pending_windowed_fullscreen: Cell<bool>,
+    is_minimized: Cell<bool>,
     animate_next_configure: Cell<bool>,
     animation_snapshot: RefCell<Option<LayoutElementRenderSnapshot>>,
     rules: ResolvedWindowRules,
@@ -93,6 +94,7 @@ impl TestWindow {
             sizing_mode: Cell::new(SizingMode::Normal),
             is_windowed_fullscreen: Cell::new(false),
             is_pending_windowed_fullscreen: Cell::new(false),
+            is_minimized: Cell::new(false),
             animate_next_configure: Cell::new(false),
             animation_snapshot: RefCell::new(None),
             rules: params.rules.unwrap_or_default(),
@@ -310,6 +312,14 @@ impl LayoutElement for TestWindow {
     fn is_urgent(&self) -> bool {
         false
     }
+
+    fn is_minimized(&self) -> bool {
+        self.0.is_minimized.get()
+    }
+
+    fn set_minimized(&mut self, minimized: bool) {
+        self.0.is_minimized.set(minimized);
+    }
 }
 
 fn arbitrary_size() -> impl Strategy<Value = Size<i32, Logical>> {
@@ -490,6 +500,13 @@ enum Op {
         is_fullscreen: bool,
     },
     ToggleWindowedFullscreen(#[proptest(strategy = "1..=5usize")] usize),
+    MinimizeWindow(#[proptest(strategy = "1..=5usize")] usize),
+    UnminimizeWindow(#[proptest(strategy = "1..=5usize")] usize),
+    SetWindowMinimized {
+        #[proptest(strategy = "1..=5usize")]
+        window: usize,
+        minimize: bool,
+    },
     FocusColumnLeft,
     FocusColumnRight,
     FocusColumnFirst,
@@ -1104,6 +1121,24 @@ impl Op {
                     return;
                 }
                 layout.set_fullscreen(&window, is_fullscreen);
+            }
+            Op::MinimizeWindow(id) => {
+                if !layout.has_window(&id) {
+                    return;
+                }
+                layout.toggle_window_minimized(&id);
+            }
+            Op::UnminimizeWindow(id) => {
+                if !layout.is_window_minimized(&id) {
+                    return;
+                }
+                layout.unminimize_window(&id, true);
+            }
+            Op::SetWindowMinimized { window, minimize } => {
+                if !layout.has_window(&window) {
+                    return;
+                }
+                layout.set_window_minimized(&window, minimize);
             }
             Op::ToggleWindowedFullscreen(id) => {
                 if !layout.has_window(&id) {
@@ -1732,6 +1767,8 @@ fn operations_dont_panic() {
         Op::MaximizeWindowToEdges { id: Some(1) },
         Op::MaximizeWindowToEdges { id: Some(2) },
         Op::MaximizeWindowToEdges { id: Some(3) },
+        Op::MinimizeWindow(1),
+        Op::UnminimizeWindow(1),
         Op::FocusColumnLeft,
         Op::FocusColumnRight,
         Op::FocusColumnRightOrFirst,
@@ -1905,6 +1942,12 @@ fn operations_from_starting_state_dont_panic() {
         Op::SetFullscreenWindow {
             window: 2,
             is_fullscreen: true,
+        },
+        Op::MinimizeWindow(1),
+        Op::UnminimizeWindow(1),
+        Op::SetWindowMinimized {
+            window: 2,
+            minimize: true,
         },
         Op::FocusColumnLeft,
         Op::FocusColumnRight,
@@ -6673,6 +6716,195 @@ fn expel_pending_left_from_fullscreen_tabbed_column() {
     ];
 
     check_ops(ops);
+}
+
+#[test]
+fn minimize_restores_to_original_position() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::MinimizeWindow(2),
+    ];
+
+    let mut layout = check_ops(ops);
+
+    assert!(layout.is_window_minimized(&2));
+    assert!(layout.has_window(&2));
+    assert_ne!(layout.focus().map(|w| *w.id()), Some(2));
+
+    check_ops_on_layout(&mut layout, [Op::UnminimizeWindow(2)]);
+
+    assert!(!layout.is_window_minimized(&2));
+    assert_eq!(layout.focus().map(|w| *w.id()), Some(2));
+
+    // The window must return between its old neighbors.
+    let (_, _, ws) = layout.workspaces().next().unwrap();
+    let ids: Vec<usize> = ws.windows().map(|w| *w.id()).collect();
+    assert_eq!(ids, [1, 2, 3]);
+}
+
+#[test]
+fn minimize_focused_window_moves_focus() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MinimizeWindow(2),
+    ];
+
+    let layout = check_ops(ops);
+
+    assert!(layout.is_window_minimized(&2));
+    assert_eq!(layout.focus().map(|w| *w.id()), Some(1));
+}
+
+#[test]
+fn close_window_while_minimized() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MinimizeWindow(1),
+        Op::CloseWindow(1),
+    ];
+
+    let layout = check_ops(ops);
+
+    assert!(!layout.has_window(&1));
+    assert!(layout.has_window(&2));
+}
+
+#[test]
+fn minimize_fullscreen_window_roundtrip() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetFullscreenWindow {
+            window: 1,
+            is_fullscreen: true,
+        },
+        Op::Communicate(1),
+        Op::MinimizeWindow(1),
+        Op::UnminimizeWindow(1),
+        Op::Communicate(1),
+    ];
+
+    let layout = check_ops(ops);
+
+    assert!(!layout.is_window_minimized(&1));
+    let (_, win) = layout.windows().find(|(_, w)| *w.id() == 1).unwrap();
+    assert!(win.pending_sizing_mode().is_fullscreen());
+}
+
+#[test]
+fn workspace_with_only_minimized_windows_survives() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MinimizeWindow(1),
+        Op::FocusWorkspaceDown,
+        Op::FocusWorkspaceUp,
+    ];
+
+    let layout = check_ops(ops);
+
+    assert!(layout.has_window(&1));
+    assert!(layout.is_window_minimized(&1));
+}
+
+#[test]
+fn minimize_from_tabbed_column_restores_into_it() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::ToggleColumnTabbedDisplay,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::ConsumeOrExpelWindowLeft { id: Some(2) },
+        Op::MinimizeWindow(2),
+        Op::UnminimizeWindow(2),
+    ];
+
+    let layout = check_ops(ops);
+
+    assert!(!layout.is_window_minimized(&2));
+    assert!(layout.has_window(&1));
+    assert!(layout.has_window(&2));
+}
+
+#[test]
+fn minimize_floating_window_roundtrip() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: {
+                let mut params = TestWindowParams::new(2);
+                params.is_floating = true;
+                params
+            },
+        },
+        Op::MinimizeWindow(2),
+        Op::UnminimizeWindow(2),
+    ];
+
+    let layout = check_ops(ops);
+
+    assert!(!layout.is_window_minimized(&2));
+    assert!(layout.has_window(&2));
+}
+
+#[test]
+fn unminimize_last_restores_most_recent() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::MinimizeWindow(1),
+        Op::MinimizeWindow(2),
+    ];
+
+    let mut layout = check_ops(ops);
+
+    assert_eq!(layout.last_minimized_window(), Some(2));
+    layout.unminimize_last_window();
+    layout.verify_invariants();
+
+    assert!(!layout.is_window_minimized(&2));
+    assert!(layout.is_window_minimized(&1));
+    assert_eq!(layout.last_minimized_window(), Some(1));
 }
 
 #[test]

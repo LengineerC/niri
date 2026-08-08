@@ -1030,6 +1030,49 @@ impl State {
                     self.niri.queue_redraw_all();
                 }
             }
+            Action::MinimizeWindow => {
+                let focus = self.niri.layout.focus().map(|m| m.window.clone());
+                if let Some(window) = focus {
+                    self.minimize_window(&window);
+                }
+            }
+            Action::MinimizeWindowById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    self.minimize_window(&window);
+                }
+            }
+            Action::UnminimizeWindow => {
+                let window = self.niri.layout.last_minimized_window();
+                if let Some(window) = window {
+                    self.unminimize_window(&window, true);
+                }
+            }
+            Action::UnminimizeWindowById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    self.unminimize_window(&window, true);
+                }
+            }
+            Action::ToggleWindowMinimized => {
+                let focus = self.niri.layout.focus().map(|m| m.window.clone());
+                if let Some(window) = focus {
+                    self.minimize_window(&window);
+                }
+            }
+            Action::ToggleWindowMinimizedById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    if self.niri.layout.is_window_minimized(&window) {
+                        self.unminimize_window(&window, true);
+                    } else {
+                        self.minimize_window(&window);
+                    }
+                }
+            }
             Action::FocusWindow(id) => {
                 let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());

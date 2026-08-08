@@ -338,6 +338,39 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Minimize a window.
+    #[cfg_attr(feature = "clap", clap(about = "Minimize the focused window"))]
+    MinimizeWindow {
+        /// Id of the window to minimize.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Unminimize (restore) a window.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Unminimize the most recently minimized window")
+    )]
+    UnminimizeWindow {
+        /// Id of the window to unminimize.
+        ///
+        /// If `None`, uses the most recently minimized window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Toggle the minimized state of a window.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Toggle the minimized state of the focused window")
+    )]
+    ToggleWindowMinimized {
+        /// Id of the window to toggle the minimized state of.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     /// Focus a window by id.
     FocusWindow {
         /// Id of the window to focus.
@@ -1392,6 +1425,10 @@ pub struct Window {
     pub is_floating: bool,
     /// Whether this window requests your attention.
     pub is_urgent: bool,
+    /// Whether this window is currently minimized.
+    ///
+    /// Minimized windows remain on their workspace but are hidden from the layout until restored.
+    pub is_minimized: bool,
     /// Position- and size-related properties of the window.
     pub layout: WindowLayout,
     /// Timestamp when the window was most recently focused.
@@ -1716,6 +1753,13 @@ pub enum Event {
         id: u64,
         /// The new urgency state of the window.
         urgent: bool,
+    },
+    /// Window minimized state changed.
+    WindowMinimizedChanged {
+        /// Id of the window.
+        id: u64,
+        /// The new minimized state of the window.
+        is_minimized: bool,
     },
     /// The layout of one or more windows has changed.
     WindowLayoutsChanged {

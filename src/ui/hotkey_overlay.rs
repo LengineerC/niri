@@ -480,6 +480,9 @@ fn action_name(action: &Action) -> String {
         Action::MaximizeColumn => String::from("Maximize Column"),
         Action::ConsumeOrExpelWindowLeft => String::from("Consume or Expel Window Left"),
         Action::ConsumeOrExpelWindowRight => String::from("Consume or Expel Window Right"),
+        Action::MinimizeWindow => String::from("Minimize Window"),
+        Action::UnminimizeWindow => String::from("Unminimize Window"),
+        Action::ToggleWindowMinimized => String::from("Minimize or Restore Window"),
         Action::ToggleWindowFloating => String::from("Move Window Between Floating and Tiling"),
         Action::SwitchFocusBetweenFloatingAndTiling => {
             String::from("Switch Focus Between Floating and Tiling")

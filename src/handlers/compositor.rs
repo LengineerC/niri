@@ -150,6 +150,8 @@ impl CompositorHandler for State {
                     // moment, that is here.
                     let is_floating = rules.compute_open_floating(toplevel);
 
+                    let open_minimized = rules.open_minimized == Some(true);
+
                     // Figure out if we should activate the window.
                     let activate = rules.open_focused.map(|focus| {
                         if focus {
@@ -175,6 +177,12 @@ impl CompositorHandler for State {
                             }
                         }
                     });
+                    // Windows opening minimized never take focus.
+                    let activate = if open_minimized {
+                        ActivateWindow::No
+                    } else {
+                        activate
+                    };
 
                     let parent = toplevel
                         .parent()
@@ -234,8 +242,16 @@ impl CompositorHandler for State {
                         error!("layout is missing the window that we just added");
                     }
 
+                    // Move the window straight into the minimized state. This happens within one
+                    // commit cycle, so the window never shows up on screen in-between.
+                    if open_minimized {
+                        self.niri.layout.set_window_minimized(&window, true);
+                    }
+
                     if let Some(output) = output {
-                        self.niri.layout.start_open_animation_for_window(&window);
+                        if !open_minimized {
+                            self.niri.layout.start_open_animation_for_window(&window);
+                        }
 
                         let new_focus = self.niri.layout.focus().map(|m| &m.window);
                         if new_focus == Some(&window) {
@@ -265,6 +281,12 @@ impl CompositorHandler for State {
                 let output = output.cloned();
 
                 let id = mapped.id();
+
+                // Commits from invisible minimized windows don't need to wake up rendering,
+                // unless the window is being screencast or shown in the MRU switcher.
+                let skip_redraw = !mapped.is_window_cast_target()
+                    && self.niri.layout.is_window_minimized_hidden(&window)
+                    && !self.niri.window_mru_ui.is_open();
 
                 // This is a commit of a previously-mapped toplevel.
                 let is_mapped = is_mapped(surface);
@@ -367,8 +389,10 @@ impl CompositorHandler for State {
                 self.update_reactive_popups(&window);
 
                 if let Some(output) = output {
-                    self.niri.queue_redraw(&output);
-                    self.niri.queue_redraw_mru_output();
+                    if !skip_redraw {
+                        self.niri.queue_redraw(&output);
+                        self.niri.queue_redraw_mru_output();
+                    }
                 }
                 return;
             }
@@ -381,14 +405,19 @@ impl CompositorHandler for State {
         if let Some((mapped, output)) = root_window_output {
             let window = mapped.window.clone();
             let output = output.cloned();
+            let skip_redraw = !mapped.is_window_cast_target()
+                && self.niri.layout.is_window_minimized_hidden(&window)
+                && !self.niri.window_mru_ui.is_open();
             window.on_commit();
             self.niri
                 .window_mru_ui
                 .update_window(&self.niri.layout, mapped.id());
             self.niri.layout.update_window(&window, None);
             if let Some(output) = output {
-                self.niri.queue_redraw(&output);
-                self.niri.queue_redraw_mru_output();
+                if !skip_redraw {
+                    self.niri.queue_redraw(&output);
+                    self.niri.queue_redraw_mru_output();
+                }
             }
             return;
         }
