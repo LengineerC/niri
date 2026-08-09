@@ -1565,7 +1565,6 @@ impl<W: LayoutElement> Workspace<W> {
             removed.tile.window_mut().set_minimized(false);
             removed.tile.window_mut().set_suspended(false);
             removed.tile.minimized_at = None;
-            removed.tile.ensure_alpha_animates_to_1();
         }
 
         if let Some(output) = &self.output {

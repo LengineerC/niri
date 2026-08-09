@@ -72,6 +72,9 @@ pub struct Tile<W: LayoutElement> {
     /// The black backdrop for fullscreen windows.
     fullscreen_backdrop: SolidColorBuffer,
 
+    /// Darkening scrim drawn over the window while it is minimized (e.g. in the grid overview).
+    minimized_scrim: SolidColorBuffer,
+
     /// Whether the tile should float upon unfullscreening.
     pub(super) restore_to_floating: bool,
 
@@ -209,6 +212,7 @@ impl<W: LayoutElement> Tile<W> {
             shadow: Shadow::new(shadow_config),
             sizing_mode,
             fullscreen_backdrop: SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.]),
+            minimized_scrim: SolidColorBuffer::new((0., 0.), [0., 0., 0., 0.35]),
             restore_to_floating: false,
             floating_window_size: None,
             floating_pos: None,
@@ -555,6 +559,7 @@ impl<W: LayoutElement> Tile<W> {
         );
 
         self.fullscreen_backdrop.resize(animated_tile_size);
+        self.minimized_scrim.resize(animated_tile_size);
     }
 
     pub fn scale(&self) -> f64 {
@@ -1073,6 +1078,19 @@ impl<W: LayoutElement> Tile<W> {
         // passed to update_render_elements(). But, it works well enough for what it is.
         let bob_offset = self.bob_offset();
         let location = location + bob_offset;
+
+        // Minimized windows (visible only as grid overview thumbnails) are darkened by a scrim
+        // instead of transparency: the window content must be neither translucent nor rendered
+        // through an offscreen, so that background effects keep working.
+        if self.window.is_minimized() {
+            let elem = SolidColorRenderElement::from_buffer(
+                &self.minimized_scrim,
+                location,
+                1.,
+                Kind::Unspecified,
+            );
+            push(elem.into());
+        }
         xray_pos = xray_pos.offset(bob_offset);
 
         let window_loc = self.window_loc();

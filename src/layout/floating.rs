@@ -1140,12 +1140,6 @@ impl<W: LayoutElement> FloatingSpace<W> {
         tile.window_mut().set_minimized(minimize);
         if minimize {
             tile.minimized_at = Some(super::tile::next_minimize_seq());
-            tile.animate_alpha(
-                super::scrolling::MINIMIZED_PREVIEW_ALPHA,
-                super::scrolling::MINIMIZED_PREVIEW_ALPHA,
-                self.options.animations.window_movement.0,
-            );
-            tile.hold_alpha_animation_after_done();
 
             // Keep the active window on a visible window (topmost first).
             if self.active_window_id.as_ref() == Some(window) {
@@ -1157,7 +1151,6 @@ impl<W: LayoutElement> FloatingSpace<W> {
             }
         } else {
             tile.minimized_at = None;
-            tile.ensure_alpha_animates_to_1();
 
             if self.active_window_id.is_none() {
                 self.active_window_id = Some(window.clone());

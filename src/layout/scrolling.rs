@@ -32,9 +32,6 @@ use crate::window::ResolvedWindowRules;
 const VIEW_GESTURE_WORKING_AREA_MOVEMENT: f64 = 1200.;
 
 /// A scrollable-tiling space for windows.
-/// Alpha that minimized windows are dimmed to in the grid overview.
-pub(super) const MINIMIZED_PREVIEW_ALPHA: f64 = 0.7;
-
 #[derive(Debug)]
 pub struct ScrollingSpace<W: LayoutElement> {
     /// Columns of windows on this space.
@@ -2238,12 +2235,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.activate_column_with_anim_config(new_idx, self.options.animations.window_movement.0);
     }
 
-    /// Minimizes or restores a window in place.
+    /// Minimizes or restores a window.
     ///
-    /// The tile keeps its slot in its column and the column keeps its index in the strip; a
-    /// fully-minimized column becomes a zero-width placeholder. The window itself is never
-    /// resized or configured by this. Neighbor columns animate to their new positions and the
-    /// view stays anchored to the active column.
+    /// Minimizing removes the tile through the standard removal path (correct focus, view and
+    /// neighbor animations) and reinserts it as an invisible zero-width placeholder column at
+    /// the window's spot. A window minimized out of a multi-window column becomes its own
+    /// placeholder column right of it; restoring makes it a new column there. The window itself
+    /// is never resized or configured.
     pub fn set_window_minimized(&mut self, window: &W::Id, minimize: bool) -> bool {
         let Some((col_idx, tile_idx)) = self.position_of(window) else {
             return false;
@@ -2256,85 +2254,37 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return false;
         }
 
-        let old_xs: Vec<f64> = self
-            .column_xs(self.data.iter().copied())
-            .take(self.columns.len())
-            .collect();
-        let old_active_x = self.column_x(self.active_column_idx);
-        let was_active_col = col_idx == self.active_column_idx;
+        if minimize {
+            let solo = self.columns[col_idx].tiles.len() == 1;
+            let insert_idx = if solo { col_idx } else { col_idx + 1 };
 
-        {
-            let col = &mut self.columns[col_idx];
-            let tile = &mut col.tiles[tile_idx];
+            let removed = self.remove_tile_by_idx(col_idx, tile_idx, Transaction::new(), None);
+            let RemovedTile {
+                mut tile,
+                width,
+                is_full_width,
+                ..
+            } = removed;
 
-            tile.window_mut().set_minimized(minimize);
-            if minimize {
-                tile.minimized_at = Some(super::tile::next_minimize_seq());
-                // Dim the tile for its grid overview thumbnail.
-                tile.animate_alpha(
-                    MINIMIZED_PREVIEW_ALPHA,
-                    MINIMIZED_PREVIEW_ALPHA,
-                    self.options.animations.window_movement.0,
-                );
-                tile.hold_alpha_animation_after_done();
-            } else {
-                tile.minimized_at = None;
-                tile.ensure_alpha_animates_to_1();
-            }
+            tile.stop_move_animations();
+            tile.alpha_animation = None;
+            tile.window_mut().set_minimized(true);
+            tile.minimized_at = Some(super::tile::next_minimize_seq());
 
-            // The tile's cached data flips between real size and layout-neutral zero.
-            col.data[tile_idx].update(&col.tiles[tile_idx]);
+            self.add_tile(Some(insert_idx), tile, false, width, is_full_width, None);
+        } else {
+            let removed = self.remove_tile_by_idx(col_idx, tile_idx, Transaction::new(), None);
+            let RemovedTile {
+                mut tile,
+                width,
+                is_full_width,
+                ..
+            } = removed;
 
-            // Keep the active tile on a visible tile (mirrors removal focus rules).
-            if minimize && col.active_tile_idx == tile_idx {
-                if let Some(idx) = col
-                    .next_visible_tile_idx(tile_idx)
-                    .or_else(|| col.prev_visible_tile_idx(tile_idx))
-                {
-                    col.activate_idx(idx);
-                }
-            } else if !minimize && !col.tiles[col.active_tile_idx].window().is_minimized() {
-                // Fine: some visible tile is already active.
-            } else if !minimize {
-                // The column was a placeholder; the restored tile becomes its active tile.
-                col.activate_idx(tile_idx);
-            }
+            tile.window_mut().set_minimized(false);
+            tile.minimized_at = None;
 
-            col.update_tile_sizes(true);
-        }
-        let mut data = self.data[col_idx];
-        data.update(&self.columns[col_idx]);
-        self.data[col_idx] = data;
-
-        // If the active column became a placeholder, activation moves to a neighbor.
-        let mut active_changed = false;
-        if minimize && was_active_col && !self.columns[col_idx].has_visible_tiles() {
-            if let Some(idx) = self
-                .next_interactive_column(col_idx)
-                .or_else(|| self.prev_interactive_column(col_idx))
-            {
-                self.activate_column_with_anim_config(
-                    idx,
-                    self.options.animations.window_movement.0,
-                );
-                active_changed = true;
-            }
-        }
-
-        // Animate neighbors into their new positions and keep the view anchored.
-        let new_xs: Vec<f64> = self
-            .column_xs(self.data.iter().copied())
-            .take(self.columns.len())
-            .collect();
-        for (col, (old_x, new_x)) in zip(&mut self.columns, zip(old_xs, new_xs)) {
-            let delta = old_x - new_x;
-            if delta != 0. {
-                col.animate_move_from(delta);
-            }
-        }
-        if !active_changed {
-            let new_active_x = self.column_x(self.active_column_idx);
-            self.view_offset.offset(old_active_x - new_active_x);
+            self.add_tile(Some(col_idx), tile, false, width, is_full_width, None);
         }
 
         true
