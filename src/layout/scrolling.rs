@@ -6017,6 +6017,19 @@ impl<W: LayoutElement> Column<W> {
     }
 
     fn grid_preview_target_size(&self) -> Size<f64, Logical> {
+        // Placeholder columns are sized as the column they will restore into, so that the grid
+        // doesn't inflate their frozen (possibly half-height) window size to the row height.
+        if !self.has_visible_tiles() {
+            let width = if self.is_full_width {
+                ColumnWidth::Proportion(1.)
+            } else {
+                self.width
+            };
+            let width = self.resolve_column_width(width);
+            let height = self.working_area.size.h - self.options.layout.gaps * 2.;
+            return Size::from((width.max(1.), height.max(1.)));
+        }
+
         // Use expected sizes rather than current ones, so that pending resizes (e.g. right after
         // a tile is added to, or removed from, the column) don't produce transient grid overview
         // layouts that snap back once the clients commit.

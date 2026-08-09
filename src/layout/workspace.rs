@@ -435,27 +435,6 @@ impl<W: LayoutElement> Workspace<W> {
 
             go.compute_layout(&items, self.working_area, false);
 
-            // Minimized windows grow out of their placeholder position in the strip instead of
-            // flying in at full size.
-            let minimized_items: Vec<_> = go
-                .layout
-                .entries
-                .iter()
-                .filter(|(item, _)| {
-                    let id = item.window_id();
-                    self.windows()
-                        .any(|win| win.id() == id && win.is_minimized())
-                })
-                .map(|(item, _)| item.clone())
-                .collect();
-            for item in minimized_items {
-                if let Some(entry) = go.entry_scales.iter_mut().find(|(i, _)| *i == item) {
-                    entry.1 = 0.15;
-                } else {
-                    go.entry_scales.push((item, 0.15));
-                }
-            }
-
             // Initialize column_tile_focus for Column items.
             for (item, _) in &go.layout.entries {
                 if let GridItem::Column { col_idx, .. } = item {
@@ -3264,6 +3243,10 @@ impl<W: LayoutElement> Workspace<W> {
         if self.is_grid_overview_open() {
             let focus = (!minimize).then(|| id.clone());
             self.refresh_grid_overview_after_action(focus.as_ref(), false, Vec::new());
+        } else if !minimize {
+            // Restored windows appear with the open animation. With the grid overview open the
+            // grid close animation carries the window into place instead.
+            self.start_open_animation(id);
         }
 
         true

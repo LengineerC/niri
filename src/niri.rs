@@ -2569,12 +2569,32 @@ impl State {
             return;
         }
 
+        let surface = window.toplevel().expect("no X11 support").wl_surface();
+        let Some((_, output)) = self.niri.layout.find_window_and_output(surface) else {
+            return;
+        };
+        let output = output.cloned();
+
+        // Play the window-close animation for the disappearing window; the layout handles the
+        // neighbors sliding in.
+        self.store_unmap_snapshot(window, output.as_ref());
+
+        let transaction = crate::utils::transaction::Transaction::new();
+        let blocker = transaction.blocker();
+        self.backend.with_primary_renderer(|renderer| {
+            self.niri
+                .layout
+                .start_close_animation_for_window(renderer, window, blocker);
+        });
+
         let active_window = self.niri.layout.focus().map(|m| &m.window);
         let was_active = active_window == Some(window);
 
-        // The layout handles the visuals in place: the window's spot collapses and neighbors
-        // slide in.
         self.niri.layout.set_window_minimized(window, true);
+
+        if !transaction.is_last() {
+            transaction.register_deadline_timer(&self.niri.event_loop);
+        }
 
         if was_active {
             self.maybe_warp_cursor_to_focus();
