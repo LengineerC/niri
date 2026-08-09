@@ -519,6 +519,47 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.columns.len()
     }
 
+    /// Position of the seam where a minimized window would be restored, in the same
+    /// view-relative render coordinates as grid preview `normal_pos`.
+    ///
+    /// Resolution mirrors the restore logic: the old column if a column neighbor is still
+    /// around, otherwise right of the old left-hand neighbor, otherwise the remembered column
+    /// index. Grid open/close animations use this as the window's "normal position", so
+    /// minimized windows grow out of and shrink back into the strip where they live.
+    pub(super) fn minimize_seam_origin(
+        &self,
+        snapshot: &MinimizeSnapshot<W>,
+        use_target_view_pos: bool,
+    ) -> Point<f64, Logical> {
+        let col_idx = snapshot
+            .column_neighbor
+            .as_ref()
+            .and_then(|(n, _)| self.position_of(n))
+            .map(|(c, _)| c)
+            .or_else(|| {
+                let n = snapshot.left_neighbor.as_ref()?;
+                let (c, _) = self.position_of(n)?;
+                Some(c + 1)
+            })
+            .unwrap_or_else(|| snapshot.column_idx.min(self.columns.len()));
+
+        let x = self.column_x(col_idx);
+        let y = self
+            .columns
+            .get(col_idx.min(self.columns.len().saturating_sub(1)))
+            .and_then(|col| col.tiles().next().map(|(_, off)| off.y))
+            .unwrap_or_else(|| self.working_area.loc.y + self.options.layout.gaps);
+
+        let view_pos = if use_target_view_pos {
+            self.target_view_pos()
+        } else {
+            self.view_pos()
+        };
+        let pos = Point::from((x - view_pos, y));
+        pos.to_physical_precise_round(self.scale)
+            .to_logical(self.scale)
+    }
+
     /// Captures where a window sits in the layout so it can be restored there after
     /// being minimized.
     pub(super) fn minimize_snapshot(&self, window: &W::Id) -> Option<MinimizeSnapshot<W>> {

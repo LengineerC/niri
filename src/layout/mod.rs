@@ -4274,12 +4274,15 @@ impl<W: LayoutElement> Layout<W> {
             ws.set_maximized(id, false);
         }
 
+        // With the grid overview open, the item morphs from a normal window into a minimized
+        // thumbnail; capture the visuals so the transition is continuous.
+        let snapshots = ws.grid_window_visual_snapshots();
+
         if !ws.minimize_window(id, was_fullscreen, was_maximized) {
             return;
         }
 
-        // If the grid overview is open, the window reappears in it as a minimized item.
-        ws.on_window_added_in_grid(id);
+        ws.refresh_grid_overview_after_action(None, false, snapshots);
     }
 
     /// Restores a minimized window into its workspace.
@@ -4296,12 +4299,16 @@ impl<W: LayoutElement> Layout<W> {
         } else {
             ActivateWindow::No
         };
+
+        // With the grid overview open, animate the restored window from its thumbnail cell.
+        let snapshots = ws.grid_window_visual_snapshots();
+
         let Some((was_fullscreen, was_maximized)) = ws.unminimize_window(id, activate_window)
         else {
             return;
         };
 
-        ws.refresh_grid_overview_after_action(Some(id), false, Vec::new());
+        ws.refresh_grid_overview_after_action(Some(id), false, snapshots);
 
         if was_fullscreen {
             self.set_fullscreen(id, true);

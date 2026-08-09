@@ -767,7 +767,9 @@ fn parse_select_options(options: SelectSourcesOptions) -> Result<SelectedOptions
         .filter(|t| !t.is_empty())
         .ok_or_else(|| format!("invalid source types {types}"))?;
 
-    let cursor_mode = options.cursor_mode.unwrap_or(PickerCursorMode::Hidden as u32);
+    let cursor_mode = options
+        .cursor_mode
+        .unwrap_or(PickerCursorMode::Hidden as u32);
     let picker_cursor_mode = PickerCursorMode::try_from(cursor_mode).map_err(str::to_owned)?;
     let cursor_mode = match picker_cursor_mode {
         PickerCursorMode::Hidden => CursorMode::Hidden,
@@ -812,7 +814,9 @@ fn parse_restore_data(vendor: &str, version: u32, inner: &Value<'_>) -> Option<R
 
     let creation_time: i64 = inner_fields[0].downcast_ref().ok()?;
     let _last_used_time: i64 = inner_fields[1].downcast_ref().ok()?;
-    let streams = inner_fields[2].downcast_ref::<zbus::zvariant::Array>().ok()?;
+    let streams = inner_fields[2]
+        .downcast_ref::<zbus::zvariant::Array>()
+        .ok()?;
 
     let mut monitors = Vec::new();
     for stream in streams.iter() {
@@ -1094,13 +1098,12 @@ mod tests {
         let inner = Value::from((
             1i64,
             2i64,
-            vec![(
-                0u32,
-                SOURCE_TYPE_MONITOR,
-                Value::new(Value::from("DP-1")),
-            )],
+            vec![(0u32, SOURCE_TYPE_MONITOR, Value::new(Value::from("DP-1")))],
         ));
-        assert_eq!(parse_restore_data("KDE", RESTORE_FORMAT_VERSION, &inner), None);
+        assert_eq!(
+            parse_restore_data("KDE", RESTORE_FORMAT_VERSION, &inner),
+            None
+        );
         assert_eq!(parse_restore_data(RESTORE_VENDOR, 2, &inner), None);
         assert!(parse_restore_data("GNOME", RESTORE_FORMAT_VERSION, &inner).is_some());
         assert!(parse_restore_data(RESTORE_VENDOR, RESTORE_FORMAT_VERSION, &inner).is_some());

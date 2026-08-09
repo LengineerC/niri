@@ -29,8 +29,7 @@ mod enabled {
     use smithay::backend::renderer::element::utils::{
         Relocate, RelocateRenderElement, RescaleRenderElement,
     };
-    use smithay::backend::renderer::element::Kind;
-    use smithay::backend::renderer::element::RenderElement;
+    use smithay::backend::renderer::element::{Kind, RenderElement};
     use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
     use smithay::output::{Output, WeakOutput};
     use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};

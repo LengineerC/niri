@@ -377,15 +377,22 @@ impl<W: LayoutElement> GridOverview<W> {
             let start_scale = Self::matching_value(&self.entry_scales, item)
                 .copied()
                 .unwrap_or(info.target_scale);
+            // Minimized windows shrink back into the seam they grew out of instead of
+            // returning to full size.
+            let end_scale = if matches!(item, GridItem::Minimized { .. }) {
+                0.06
+            } else {
+                1.
+            };
             let start_size = item_source_size.upscale(start_scale);
             let start_center = start_pos + Point::from((start_size.w / 2., start_size.h / 2.));
-            let end_center =
-                fallback_pos + Point::from((item_source_size.w / 2., item_source_size.h / 2.));
+            let end_size = item_source_size.upscale(end_scale);
+            let end_center = fallback_pos + Point::from((end_size.w / 2., end_size.h / 2.));
             let center = Point::from((
                 start_center.x + (end_center.x - start_center.x) * t,
                 start_center.y + (end_center.y - start_center.y) * t,
             ));
-            let scale = start_scale + (1. - start_scale) * t;
+            let scale = start_scale + (end_scale - start_scale) * t;
             let size = item_source_size.upscale(scale);
             let pos = center - Point::from((size.w / 2., size.h / 2.));
 

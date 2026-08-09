@@ -234,12 +234,7 @@ impl Winit {
         let mut nodes: Vec<_> = std::fs::read_dir("/dev/dri")
             .ok()?
             .flatten()
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("renderD")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("renderD"))
             .map(|entry| entry.path())
             .collect();
         nodes.sort();

@@ -468,18 +468,30 @@ impl<W: LayoutElement> Workspace<W> {
 
             go.compute_layout(&items, self.working_area, false);
 
-            // Minimized windows have no normal-layout position to fly in from; start them at
-            // their grid position so they appear in place.
-            let minimized_targets: Vec<_> = go
+            // Minimized windows grow out of the seam in the strip where they would restore,
+            // instead of flying in at full size. Ones without a seam (floating-origin) appear
+            // at their grid position instead.
+            let minimized_seeds: Vec<_> = go
                 .layout
                 .entries
                 .iter()
                 .filter(|(item, _)| matches!(item, GridItem::Minimized { .. }))
-                .map(|(item, info)| (item.clone(), info.target_pos))
+                .map(|(item, info)| {
+                    let has_seam = self.grid_item_normal_render_pos(item, false).is_some();
+                    (item.clone(), info.target_pos, has_seam)
+                })
                 .collect();
-            for (item, pos) in minimized_targets {
-                if let Some(entry) = go.entry_positions.iter_mut().find(|(i, _)| *i == item) {
-                    entry.1 = pos;
+            for (item, target_pos, has_seam) in minimized_seeds {
+                if has_seam {
+                    // Grow from a small size at the seam.
+                    if let Some(entry) = go.entry_scales.iter_mut().find(|(i, _)| *i == item) {
+                        entry.1 = 0.15;
+                    } else {
+                        go.entry_scales.push((item.clone(), 0.15));
+                    }
+                } else if let Some(entry) = go.entry_positions.iter_mut().find(|(i, _)| *i == item)
+                {
+                    entry.1 = target_pos;
                 }
             }
 
@@ -987,25 +999,26 @@ impl<W: LayoutElement> Workspace<W> {
         let base = m
             .snapshot
             .as_ref()
-            .and_then(|s| {
-                if let Some((neighbor, _)) = &s.column_neighbor {
-                    if let Some((n_col, _)) = self.scrolling.position_of(neighbor) {
-                        return after_last_of_col(n_col);
-                    }
-                }
-                if let Some(left) = &s.left_neighbor {
-                    if let Some((l_col, _)) = self.scrolling.position_of(left) {
-                        return after_last_of_col(l_col);
-                    }
-                }
-                // Ordinal fallback: before the first item whose column index reaches the
-                // remembered one.
-                Some(
-                    items
-                        .iter()
-                        .position(|(item, _)| item_col_idx(item).is_some_and(|c| c >= s.column_idx))
-                        .unwrap_or(items.len()),
-                )
+            .map(|s| {
+                s.column_neighbor
+                    .as_ref()
+                    .and_then(|(neighbor, _)| self.scrolling.position_of(neighbor))
+                    .and_then(|(n_col, _)| after_last_of_col(n_col))
+                    .or_else(|| {
+                        let left = s.left_neighbor.as_ref()?;
+                        let (l_col, _) = self.scrolling.position_of(left)?;
+                        after_last_of_col(l_col)
+                    })
+                    .unwrap_or_else(|| {
+                        // Ordinal fallback: before the first item whose column index reaches
+                        // the remembered one.
+                        items
+                            .iter()
+                            .position(|(item, _)| {
+                                item_col_idx(item).is_some_and(|c| c >= s.column_idx)
+                            })
+                            .unwrap_or(items.len())
+                    })
             })
             .unwrap_or(items.len());
 
@@ -1077,8 +1090,19 @@ impl<W: LayoutElement> Workspace<W> {
                 .floating
                 .tiles_with_render_positions()
                 .find_map(|(tile, pos)| (tile.window().id() == window_id).then_some(pos)),
-            // Minimized windows have no position in the normal layout.
-            GridItem::Minimized { .. } => None,
+            // Minimized windows animate from/to the seam in the strip where they would be
+            // restored. Floating-origin minimized windows have no such position.
+            GridItem::Minimized { window_id } => {
+                let m = self
+                    .minimized
+                    .iter()
+                    .find(|m| m.tile.window().id() == window_id)?;
+                let snapshot = m.snapshot.as_ref()?;
+                Some(
+                    self.scrolling
+                        .minimize_seam_origin(snapshot, use_target_view_pos),
+                )
+            }
         }
     }
 
@@ -1088,8 +1112,13 @@ impl<W: LayoutElement> Workspace<W> {
                 self.scrolling.grid_item_visible_when_closing(item)
             }
             GridItem::Floating { .. } => true,
-            // Minimized windows fade out with the grid instead of flying back into the layout.
-            GridItem::Minimized { .. } => false,
+            // Minimized windows shrink back into their seam; ones without a seam
+            // (floating-origin) disappear with the grid.
+            GridItem::Minimized { window_id } => self
+                .minimized
+                .iter()
+                .find(|m| m.tile.window().id() == window_id)
+                .is_some_and(|m| m.snapshot.is_some()),
         }
     }
 
@@ -3733,6 +3762,11 @@ impl<W: LayoutElement> Workspace<W> {
             return;
         }
 
+        // Capture the grid visuals first, so that with the grid overview open, the restored
+        // window animates from its thumbnail cell to its restored position instead of
+        // disappearing until the grid has closed.
+        let snapshots = self.grid_window_visual_snapshots();
+
         if let Some((was_fullscreen, was_maximized)) =
             self.unminimize_window(window, ActivateWindow::No)
         {
@@ -3741,6 +3775,10 @@ impl<W: LayoutElement> Workspace<W> {
             } else if was_maximized {
                 self.set_maximized(window, true);
             }
+        }
+
+        if self.is_grid_overview_open() {
+            self.refresh_grid_overview_after_action(Some(window), false, snapshots);
         }
     }
 

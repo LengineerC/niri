@@ -136,11 +136,8 @@ impl DBusServers {
                 let screen_cast = ScreenCast::new(backend.ipc_outputs(), to_niri.clone());
                 dbus.conn_screen_cast = try_start(screen_cast);
 
-                match freedesktop_portal::start(
-                    to_niri,
-                    to_niri_screenshot,
-                    backend.ipc_outputs(),
-                ) {
+                match freedesktop_portal::start(to_niri, to_niri_screenshot, backend.ipc_outputs())
+                {
                     Ok((conn, casts)) => {
                         dbus.conn_portal = Some(conn);
                         dbus.portal_casts = Some(casts);
