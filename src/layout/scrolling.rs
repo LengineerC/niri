@@ -32,6 +32,9 @@ use crate::window::ResolvedWindowRules;
 const VIEW_GESTURE_WORKING_AREA_MOVEMENT: f64 = 1200.;
 
 /// A scrollable-tiling space for windows.
+/// Alpha that minimized windows are dimmed to in the grid overview.
+pub(super) const MINIMIZED_PREVIEW_ALPHA: f64 = 0.7;
+
 #[derive(Debug)]
 pub struct ScrollingSpace<W: LayoutElement> {
     /// Columns of windows on this space.
@@ -96,21 +99,6 @@ pub struct ScrollingSpace<W: LayoutElement> {
 
     /// Configurable properties of the layout.
     options: Rc<Options>,
-}
-
-/// Where a window sat in the scrolling layout at the moment it was minimized.
-///
-/// Used to restore the window near its old position even after other windows have moved.
-#[derive(Debug)]
-pub(super) struct MinimizeSnapshot<W: LayoutElement> {
-    /// Index of the column the window was in.
-    pub column_idx: usize,
-    /// Display mode of the column the window was in.
-    pub display_mode: ColumnDisplay,
-    /// Another tile in the same column, and whether the window was positioned before (above) it.
-    pub column_neighbor: Option<(W::Id, bool)>,
-    /// A window in the column to the left.
-    pub left_neighbor: Option<W::Id>,
 }
 
 niri_render_elements! {
@@ -503,92 +491,6 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         })
     }
 
-    pub fn has_window(&self, window: &W::Id) -> bool {
-        self.position_of(window).is_some()
-    }
-
-    /// Returns (column index, tile index within column) of the window.
-    pub fn position_of(&self, window: &W::Id) -> Option<(usize, usize)> {
-        self.columns
-            .iter()
-            .enumerate()
-            .find_map(|(col_idx, col)| col.position(window).map(|tile_idx| (col_idx, tile_idx)))
-    }
-
-    pub fn column_count(&self) -> usize {
-        self.columns.len()
-    }
-
-    /// Position of the seam where a minimized window would be restored, in the same
-    /// view-relative render coordinates as grid preview `normal_pos`.
-    ///
-    /// Resolution mirrors the restore logic: the old column if a column neighbor is still
-    /// around, otherwise right of the old left-hand neighbor, otherwise the remembered column
-    /// index. Grid open/close animations use this as the window's "normal position", so
-    /// minimized windows grow out of and shrink back into the strip where they live.
-    pub(super) fn minimize_seam_origin(
-        &self,
-        snapshot: &MinimizeSnapshot<W>,
-        use_target_view_pos: bool,
-    ) -> Point<f64, Logical> {
-        let col_idx = snapshot
-            .column_neighbor
-            .as_ref()
-            .and_then(|(n, _)| self.position_of(n))
-            .map(|(c, _)| c)
-            .or_else(|| {
-                let n = snapshot.left_neighbor.as_ref()?;
-                let (c, _) = self.position_of(n)?;
-                Some(c + 1)
-            })
-            .unwrap_or_else(|| snapshot.column_idx.min(self.columns.len()));
-
-        let x = self.column_x(col_idx);
-        let y = self
-            .columns
-            .get(col_idx.min(self.columns.len().saturating_sub(1)))
-            .and_then(|col| col.tiles().next().map(|(_, off)| off.y))
-            .unwrap_or_else(|| self.working_area.loc.y + self.options.layout.gaps);
-
-        let view_pos = if use_target_view_pos {
-            self.target_view_pos()
-        } else {
-            self.view_pos()
-        };
-        let pos = Point::from((x - view_pos, y));
-        pos.to_physical_precise_round(self.scale)
-            .to_logical(self.scale)
-    }
-
-    /// Captures where a window sits in the layout so it can be restored there after
-    /// being minimized.
-    pub(super) fn minimize_snapshot(&self, window: &W::Id) -> Option<MinimizeSnapshot<W>> {
-        let (col_idx, tile_idx) = self.position_of(window)?;
-        let col = &self.columns[col_idx];
-
-        let column_neighbor = if col.tiles.len() > 1 {
-            if tile_idx + 1 < col.tiles.len() {
-                Some((col.tiles[tile_idx + 1].window().id().clone(), true))
-            } else {
-                Some((col.tiles[tile_idx - 1].window().id().clone(), false))
-            }
-        } else {
-            None
-        };
-
-        let left_neighbor = col_idx
-            .checked_sub(1)
-            .map(|idx| &self.columns[idx])
-            .map(|col| col.tiles[col.active_tile_idx].window().id().clone());
-
-        Some(MinimizeSnapshot {
-            column_idx: col_idx,
-            display_mode: col.display_mode,
-            column_neighbor,
-            left_neighbor,
-        })
-    }
-
     pub fn grid_preview(&self, item: &GridItem<W>) -> Option<GridPreview<'_, W>> {
         self.grid_preview_at_view_pos(item, self.view_pos(), false)
     }
@@ -615,7 +517,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             GridItem::Tab {
                 col_idx, window_id, ..
             } => (*col_idx, Some(window_id)),
-            GridItem::Floating { .. } | GridItem::Minimized { .. } => return None,
+            GridItem::Floating { .. } => return None,
         };
 
         let col = self.columns.get(col_idx)?;
@@ -702,9 +604,20 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn grid_item_visible_when_closing(&self, item: &GridItem<W>) -> bool {
+        // Minimized windows disappear with the grid instead of flying back into the strip.
         match item {
-            GridItem::Column { .. } | GridItem::Tab { .. } | GridItem::Floating { .. } => true,
-            GridItem::Minimized { .. } => false,
+            GridItem::Column { col_idx, .. } => self
+                .columns
+                .get(*col_idx)
+                .is_none_or(|col| col.has_visible_tiles()),
+            GridItem::Tab {
+                col_idx, tile_idx, ..
+            } => self
+                .columns
+                .get(*col_idx)
+                .and_then(|col| col.tiles.get(*tile_idx))
+                .is_none_or(|tile| !tile.window().is_minimized()),
+            GridItem::Floating { .. } => true,
         }
     }
 
@@ -738,8 +651,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 let is_active = focused_window == Some(tile.window().id());
                 tile.update_render_elements(is_active, view_rect);
             }
-            // Minimized tiles are updated by the workspace, which owns them.
-            GridItem::Floating { .. } | GridItem::Minimized { .. } => (),
+            GridItem::Floating { .. } => (),
         }
     }
 
@@ -753,7 +665,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
 
         let col = &self.columns[self.active_column_idx];
-        Some(col.tiles[col.active_tile_idx].window())
+        let win = col.tiles[col.active_tile_idx].window();
+        // With every window minimized there is no active window.
+        if win.is_minimized() {
+            return None;
+        }
+        Some(win)
     }
 
     pub fn active_window_mut(&mut self) -> Option<&mut W> {
@@ -1342,6 +1259,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 self.active_column_idx + 1
             }
         });
+        // Callers may compute the index from stale state (e.g. grid overview entries).
+        let idx = idx.min(self.columns.len());
 
         column.update_config(
             self.view_size,
@@ -1489,13 +1408,23 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             // A tile above was removed; preserve the current position.
             column.active_tile_idx -= 1;
         } else if tile_idx == column.active_tile_idx {
-            // The active tile was removed, so the active tile index shifted to the next tile.
-            if tile_idx == column.tiles.len() {
-                // The bottom tile was removed and it was active, update active idx to remain valid.
-                column.activate_idx(tile_idx - 1);
+            // The active tile was removed; activate the nearest visible tile.
+            let next =
+                (tile_idx..column.tiles.len()).find(|&i| !column.tiles[i].window().is_minimized());
+            let prev = (0..tile_idx.min(column.tiles.len()))
+                .rev()
+                .find(|&i| !column.tiles[i].window().is_minimized());
+            if let Some(idx) = next.or(prev) {
+                if idx == tile_idx {
+                    // The next tile inherited the index; ensure it animates to opaque.
+                    column.active_tile_idx = idx;
+                    column.tiles[idx].ensure_alpha_animates_to_1();
+                } else {
+                    column.activate_idx(idx);
+                }
             } else {
-                // Ensure the newly active tile animates to opaque.
-                column.tiles[tile_idx].ensure_alpha_animates_to_1();
+                // Only minimized tiles remain; keep the index valid.
+                column.active_tile_idx = column.active_tile_idx.min(column.tiles.len() - 1);
             }
         }
 
@@ -1513,6 +1442,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 col.animate_move_from_with_config(-offset, movement_config);
             }
         }
+
+        self.ensure_active_column_interactive();
 
         tile
     }
@@ -2077,41 +2008,102 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .any(|col| col.start_open_animation(id))
     }
 
-    pub fn focus_left(&mut self) -> bool {
-        if self.active_column_idx == 0 {
-            return false;
+    pub fn has_window(&self, window: &W::Id) -> bool {
+        self.position_of(window).is_some()
+    }
+
+    /// Returns (column index, tile index within column) of the window.
+    pub fn position_of(&self, window: &W::Id) -> Option<(usize, usize)> {
+        self.columns
+            .iter()
+            .enumerate()
+            .find_map(|(col_idx, col)| col.position(window).map(|tile_idx| (col_idx, tile_idx)))
+    }
+
+    fn column_is_interactive(&self, idx: usize) -> bool {
+        self.columns[idx].has_visible_tiles()
+    }
+
+    /// Nearest interactive (non-placeholder) column strictly left of `from`.
+    fn prev_interactive_column(&self, from: usize) -> Option<usize> {
+        (0..from).rev().find(|&idx| self.column_is_interactive(idx))
+    }
+
+    /// Nearest interactive (non-placeholder) column strictly right of `from`.
+    fn next_interactive_column(&self, from: usize) -> Option<usize> {
+        (from + 1..self.columns.len()).find(|&idx| self.column_is_interactive(idx))
+    }
+
+    /// Moves activation off a placeholder column, if any interactive column exists.
+    fn ensure_active_column_interactive(&mut self) {
+        if self.columns.is_empty() {
+            return;
         }
-        self.activate_column(self.active_column_idx - 1);
+        if self.columns[self.active_column_idx].has_visible_tiles() {
+            return;
+        }
+        let idx = self
+            .next_interactive_column(self.active_column_idx)
+            .or_else(|| self.prev_interactive_column(self.active_column_idx));
+        if let Some(idx) = idx {
+            self.activate_column_with_anim_config(idx, self.options.animations.window_movement.0);
+        }
+    }
+
+    fn first_interactive_column(&self) -> Option<usize> {
+        (0..self.columns.len()).find(|&idx| self.column_is_interactive(idx))
+    }
+
+    fn last_interactive_column(&self) -> Option<usize> {
+        (0..self.columns.len())
+            .rev()
+            .find(|&idx| self.column_is_interactive(idx))
+    }
+
+    /// Real index of the `index`-th (0-based) interactive column.
+    fn nth_interactive_column(&self, index: usize) -> Option<usize> {
+        (0..self.columns.len())
+            .filter(|&idx| self.column_is_interactive(idx))
+            .nth(index)
+    }
+
+    pub fn focus_left(&mut self) -> bool {
+        let Some(idx) = self.prev_interactive_column(self.active_column_idx) else {
+            return false;
+        };
+        self.activate_column(idx);
         true
     }
 
     pub fn focus_right(&mut self) -> bool {
-        if self.active_column_idx + 1 >= self.columns.len() {
+        let Some(idx) = self.next_interactive_column(self.active_column_idx) else {
             return false;
-        }
-
-        self.activate_column(self.active_column_idx + 1);
+        };
+        self.activate_column(idx);
         true
     }
 
     pub fn focus_column_first(&mut self) {
-        self.activate_column(0);
+        if let Some(idx) = self.first_interactive_column() {
+            self.activate_column(idx);
+        }
     }
 
     pub fn focus_column_last(&mut self) {
-        if self.columns.is_empty() {
-            return;
+        if let Some(idx) = self.last_interactive_column() {
+            self.activate_column(idx);
         }
-
-        self.activate_column(self.columns.len() - 1);
     }
 
     pub fn focus_column(&mut self, index: usize) {
-        if self.columns.is_empty() {
+        let last = self.last_interactive_column();
+        let Some(idx) = self
+            .nth_interactive_column(index.saturating_sub(1))
+            .or(last)
+        else {
             return;
-        }
-
-        self.activate_column(index.saturating_sub(1).min(self.columns.len() - 1));
+        };
+        self.activate_column(idx);
     }
 
     pub fn focus_window_in_column(&mut self, index: u8) {
@@ -2199,11 +2191,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn move_column_to_index(&mut self, index: usize) {
-        if self.columns.is_empty() {
+        let last = self.last_interactive_column();
+        let Some(target) = self
+            .nth_interactive_column(index.saturating_sub(1))
+            .or(last)
+        else {
             return;
-        }
-
-        self.move_column_to(index.saturating_sub(1).min(self.columns.len() - 1));
+        };
+        self.move_column_to(target);
     }
 
     fn move_column_to(&mut self, new_idx: usize) {
@@ -2243,36 +2238,135 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.activate_column_with_anim_config(new_idx, self.options.animations.window_movement.0);
     }
 
-    pub fn move_left(&mut self) -> bool {
-        if self.active_column_idx == 0 {
+    /// Minimizes or restores a window in place.
+    ///
+    /// The tile keeps its slot in its column and the column keeps its index in the strip; a
+    /// fully-minimized column becomes a zero-width placeholder. The window itself is never
+    /// resized or configured by this. Neighbor columns animate to their new positions and the
+    /// view stays anchored to the active column.
+    pub fn set_window_minimized(&mut self, window: &W::Id, minimize: bool) -> bool {
+        let Some((col_idx, tile_idx)) = self.position_of(window) else {
+            return false;
+        };
+        if self.columns[col_idx].tiles[tile_idx]
+            .window()
+            .is_minimized()
+            == minimize
+        {
             return false;
         }
 
-        self.move_column_to(self.active_column_idx - 1);
+        let old_xs: Vec<f64> = self
+            .column_xs(self.data.iter().copied())
+            .take(self.columns.len())
+            .collect();
+        let old_active_x = self.column_x(self.active_column_idx);
+        let was_active_col = col_idx == self.active_column_idx;
+
+        {
+            let col = &mut self.columns[col_idx];
+            let tile = &mut col.tiles[tile_idx];
+
+            tile.window_mut().set_minimized(minimize);
+            if minimize {
+                tile.minimized_at = Some(super::tile::next_minimize_seq());
+                // Dim the tile for its grid overview thumbnail.
+                tile.animate_alpha(
+                    MINIMIZED_PREVIEW_ALPHA,
+                    MINIMIZED_PREVIEW_ALPHA,
+                    self.options.animations.window_movement.0,
+                );
+                tile.hold_alpha_animation_after_done();
+            } else {
+                tile.minimized_at = None;
+                tile.ensure_alpha_animates_to_1();
+            }
+
+            // The tile's cached data flips between real size and layout-neutral zero.
+            col.data[tile_idx].update(&col.tiles[tile_idx]);
+
+            // Keep the active tile on a visible tile (mirrors removal focus rules).
+            if minimize && col.active_tile_idx == tile_idx {
+                if let Some(idx) = col
+                    .next_visible_tile_idx(tile_idx)
+                    .or_else(|| col.prev_visible_tile_idx(tile_idx))
+                {
+                    col.activate_idx(idx);
+                }
+            } else if !minimize && !col.tiles[col.active_tile_idx].window().is_minimized() {
+                // Fine: some visible tile is already active.
+            } else if !minimize {
+                // The column was a placeholder; the restored tile becomes its active tile.
+                col.activate_idx(tile_idx);
+            }
+
+            col.update_tile_sizes(true);
+        }
+        let mut data = self.data[col_idx];
+        data.update(&self.columns[col_idx]);
+        self.data[col_idx] = data;
+
+        // If the active column became a placeholder, activation moves to a neighbor.
+        let mut active_changed = false;
+        if minimize && was_active_col && !self.columns[col_idx].has_visible_tiles() {
+            if let Some(idx) = self
+                .next_interactive_column(col_idx)
+                .or_else(|| self.prev_interactive_column(col_idx))
+            {
+                self.activate_column_with_anim_config(
+                    idx,
+                    self.options.animations.window_movement.0,
+                );
+                active_changed = true;
+            }
+        }
+
+        // Animate neighbors into their new positions and keep the view anchored.
+        let new_xs: Vec<f64> = self
+            .column_xs(self.data.iter().copied())
+            .take(self.columns.len())
+            .collect();
+        for (col, (old_x, new_x)) in zip(&mut self.columns, zip(old_xs, new_xs)) {
+            let delta = old_x - new_x;
+            if delta != 0. {
+                col.animate_move_from(delta);
+            }
+        }
+        if !active_changed {
+            let new_active_x = self.column_x(self.active_column_idx);
+            self.view_offset.offset(old_active_x - new_active_x);
+        }
+
+        true
+    }
+
+    pub fn move_left(&mut self) -> bool {
+        // Move relative to the interactive projection: placeholders are ignored and stay put.
+        let Some(target) = self.prev_interactive_column(self.active_column_idx) else {
+            return false;
+        };
+        self.move_column_to(target);
         true
     }
 
     pub fn move_right(&mut self) -> bool {
-        let new_idx = self.active_column_idx + 1;
-        if new_idx >= self.columns.len() {
+        let Some(target) = self.next_interactive_column(self.active_column_idx) else {
             return false;
-        }
-
-        self.move_column_to(new_idx);
+        };
+        self.move_column_to(target);
         true
     }
 
     pub fn move_column_to_first(&mut self) {
-        self.move_column_to(0);
+        if let Some(target) = self.first_interactive_column() {
+            self.move_column_to(target);
+        }
     }
 
     pub fn move_column_to_last(&mut self) {
-        if self.columns.is_empty() {
-            return;
+        if let Some(target) = self.last_interactive_column() {
+            self.move_column_to(target);
         }
-
-        let new_idx = self.columns.len() - 1;
-        self.move_column_to(new_idx);
     }
 
     pub fn move_down(&mut self) -> bool {
@@ -2700,25 +2794,6 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.set_column_display(display);
     }
 
-    /// Sets the display mode of the column at the given index.
-    ///
-    /// Used to restore the tabbed display mode when unminimizing a window into a fresh column.
-    pub(super) fn set_column_display_at(&mut self, col_idx: usize, display: ColumnDisplay) {
-        let Some(col) = self.columns.get_mut(col_idx) else {
-            return;
-        };
-        if col.display_mode == display {
-            return;
-        }
-
-        cancel_resize_for_column(&mut self.interactive_resize, col);
-        col.set_column_display(display);
-
-        // With place_within_column, the tab indicator changes the column size immediately.
-        self.data[col_idx].update(col);
-        col.update_tile_sizes(true);
-    }
-
     pub fn set_column_display(&mut self, display: ColumnDisplay) {
         if self.columns.is_empty() {
             return;
@@ -2859,7 +2934,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         data.map(move |data| {
             let rv = x;
-            x += data.width + gaps;
+            // Placeholder columns (width 0) are seamless: no width, no gap.
+            if data.width > 0. {
+                x += data.width + gaps;
+            }
             rv
         })
     }
@@ -2986,19 +3064,32 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
-        self.columns
-            .iter()
-            .enumerate()
-            .flat_map(move |(col_idx, col)| {
-                col.tiles().enumerate().map(move |(tile_idx, (tile, _))| {
-                    let layout = WindowLayout {
-                        // Our indices are 1-based, consistent with the actions.
-                        pos_in_scrolling_layout: Some((col_idx + 1, tile_idx + 1)),
-                        ..tile.ipc_layout_template()
-                    };
-                    (tile, layout)
-                })
+        // External consumers see the interactive world: placeholder columns take no column
+        // number, minimized windows report no position.
+        let mut interactive_col_idx = 0;
+        self.columns.iter().flat_map(move |col| {
+            let col_number = if col.has_visible_tiles() {
+                interactive_col_idx += 1;
+                Some(interactive_col_idx)
+            } else {
+                None
+            };
+            let mut visible_tile_idx = 0;
+            col.tiles().map(move |(tile, _)| {
+                let pos = if tile.window().is_minimized() {
+                    None
+                } else {
+                    visible_tile_idx += 1;
+                    col_number.map(|c| (c, visible_tile_idx))
+                };
+                let layout = WindowLayout {
+                    // Our indices are 1-based, consistent with the actions.
+                    pos_in_scrolling_layout: pos,
+                    ..tile.ipc_layout_template()
+                };
+                (tile, layout)
             })
+        })
     }
 
     pub(super) fn insert_hint_area(
@@ -4348,6 +4439,24 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         if !self.columns.is_empty() {
             assert!(self.active_column_idx < self.columns.len());
 
+            // The active column must be interactive whenever any interactive column exists.
+            if self.columns.iter().any(Column::has_visible_tiles) {
+                assert!(
+                    self.columns[self.active_column_idx].has_visible_tiles(),
+                    "the active column must not be a placeholder"
+                );
+            }
+
+            for col in &self.columns {
+                // The active tile must be visible whenever the column has visible tiles.
+                if col.has_visible_tiles() {
+                    assert!(
+                        !col.tiles[col.active_tile_idx].window().is_minimized(),
+                        "the active tile must not be minimized"
+                    );
+                }
+            }
+
             for (column, data) in zip(&self.columns, &self.data) {
                 assert!(Rc::ptr_eq(&self.options, &column.options));
                 assert_eq!(self.clock, column.clock);
@@ -4475,7 +4584,12 @@ impl ColumnData {
     }
 
     pub fn update<W: LayoutElement>(&mut self, column: &Column<W>) {
-        self.width = column.width();
+        // Placeholder columns (all tiles minimized) take no width in the strip.
+        self.width = if column.has_visible_tiles() {
+            column.width()
+        } else {
+            0.
+        };
     }
 }
 
@@ -4491,7 +4605,13 @@ impl TileData {
     }
 
     pub fn update<W: LayoutElement>(&mut self, tile: &Tile<W>) {
-        self.size = tile.tile_size();
+        // Minimized tiles are layout-neutral: zero size in the column, while the window itself
+        // keeps its real size untouched.
+        self.size = if tile.window().is_minimized() {
+            Size::default()
+        } else {
+            tile.tile_size()
+        };
         self.interactively_resizing_by_left_edge = tile
             .window()
             .interactive_resize_data()
@@ -4701,6 +4821,8 @@ impl<W: LayoutElement> Column<W> {
         let offsets = self.tile_offsets_iter(self.data.iter().copied());
         let tabs = zip(&self.tiles, offsets)
             .enumerate()
+            // Minimized tabs don't get a tab indicator entry.
+            .filter(|(_, (tile, _))| !tile.window().is_minimized())
             .map(|(tile_idx, (tile, tile_off))| {
                 let is_active = tile_idx == active_idx;
                 let is_urgent = tile.window().is_urgent();
@@ -4714,11 +4836,16 @@ impl<W: LayoutElement> Column<W> {
         // many changes to the code for too little benefit (it's mostly invisible anyway).
         let enabled = self.display_mode == ColumnDisplay::Tabbed && self.sizing_mode().is_normal();
 
+        let visible_tiles = self
+            .tiles
+            .iter()
+            .filter(|tile| !tile.window().is_minimized())
+            .count();
         self.tab_indicator.update_render_elements(
             enabled,
             self.tab_indicator_area(),
             view_rect,
-            self.tiles.len(),
+            visible_tiles,
             tabs,
             is_active,
             self.scale,
@@ -4864,6 +4991,22 @@ impl<W: LayoutElement> Column<W> {
         }
     }
 
+    /// Whether this column has any non-minimized tiles.
+    ///
+    /// A column whose every tile is minimized is a placeholder: it keeps its index in the strip
+    /// but contributes no width and is skipped by focus and column operations.
+    pub fn has_visible_tiles(&self) -> bool {
+        self.tiles.iter().any(|tile| !tile.window().is_minimized())
+    }
+
+    fn visible_tile_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, tile)| !tile.window().is_minimized())
+            .map(|(idx, _)| idx)
+    }
+
     pub fn contains(&self, window: &W::Id) -> bool {
         self.tiles
             .iter()
@@ -4879,6 +5022,10 @@ impl<W: LayoutElement> Column<W> {
     }
 
     fn activate_idx(&mut self, idx: usize) -> bool {
+        if self.tiles[idx].window().is_minimized() {
+            return false;
+        }
+
         if self.active_tile_idx == idx {
             return false;
         }
@@ -5020,6 +5167,10 @@ impl<W: LayoutElement> Column<W> {
         let sizing_mode = self.pending_sizing_mode();
         if matches!(sizing_mode, SizingMode::Fullscreen | SizingMode::Maximized) {
             for (tile_idx, tile) in self.tiles.iter_mut().enumerate() {
+                if tile.window().is_minimized() {
+                    continue;
+                }
+
                 // In tabbed mode, only the visible window participates in the transaction.
                 let is_active = tile_idx == self.active_tile_idx;
                 let transaction = if self.display_mode == ColumnDisplay::Tabbed && !is_active {
@@ -5054,6 +5205,22 @@ impl<W: LayoutElement> Column<W> {
             .iter()
             .map(Tile::max_size_nonfullscreen)
             .collect();
+
+        // Minimized tiles are layout-neutral: they take no space, impose no constraints, and
+        // receive no configures (their windows keep their size untouched).
+        let minimized: Vec<bool> = self
+            .tiles
+            .iter()
+            .map(|tile| tile.window().is_minimized())
+            .collect();
+        let mut min_size = min_size;
+        let mut max_size = max_size;
+        for (idx, is_minimized) in minimized.iter().enumerate() {
+            if *is_minimized {
+                min_size[idx] = Size::from((1., 0.));
+                max_size[idx] = Size::from((0., 0.));
+            }
+        }
 
         // Compute the column width.
         let min_width = min_size
@@ -5094,11 +5261,9 @@ impl<W: LayoutElement> Column<W> {
         // to other windows' min sizes.
         let mut max_non_auto_window_height = None;
         if self.tiles.len() > 1 && !is_tabbed {
-            if let Some(non_auto_idx) = self
-                .data
-                .iter()
-                .position(|data| !matches!(data.height, WindowHeight::Auto { .. }))
-            {
+            if let Some(non_auto_idx) = zip(&self.data, &minimized).position(|(data, minimized)| {
+                !*minimized && !matches!(data.height, WindowHeight::Auto { .. })
+            }) {
                 let min_height_taken = min_size
                     .iter()
                     .enumerate()
@@ -5152,9 +5317,11 @@ impl<W: LayoutElement> Column<W> {
         // In tabbed display mode, fill fixed heights right away.
         if is_tabbed {
             // All tiles have the same height, equal to the height of the only fixed tile (if any).
-            let tabbed_height = heights
-                .iter()
-                .find_map(|h| {
+            let tabbed_height = zip(&heights, &minimized)
+                .find_map(|(h, minimized)| {
+                    if *minimized {
+                        return None;
+                    }
                     if let WindowHeight::Fixed(h) = h {
                         Some(*h)
                     } else {
@@ -5180,7 +5347,15 @@ impl<W: LayoutElement> Column<W> {
             // The following logic will apply individual min/max height, etc.
         }
 
-        let gaps_left = self.options.layout.gaps * (self.tiles.len() + 1) as f64;
+        // Force minimized tiles to zero height, after the tabbed fill above.
+        for (h, is_minimized) in zip(&mut heights, &minimized) {
+            if *is_minimized {
+                *h = WindowHeight::Fixed(0.);
+            }
+        }
+
+        let visible_tiles = minimized.iter().filter(|m| !**m).count();
+        let gaps_left = self.options.layout.gaps * (visible_tiles + 1) as f64;
         let mut height_left = working_size.h - gaps_left;
         let mut auto_tiles_left = self.tiles.len();
 
@@ -5296,6 +5471,10 @@ impl<W: LayoutElement> Column<W> {
                 unreachable!()
             };
 
+            if minimized[tile_idx] {
+                continue;
+            }
+
             let size = Size::from((width, height));
 
             // In tabbed mode, only the visible window participates in the transaction.
@@ -5332,20 +5511,42 @@ impl<W: LayoutElement> Column<W> {
         self.activate_idx(idx);
     }
 
+    fn prev_visible_tile_idx(&self, from: usize) -> Option<usize> {
+        (0..from)
+            .rev()
+            .find(|&idx| !self.tiles[idx].window().is_minimized())
+    }
+
+    fn next_visible_tile_idx(&self, from: usize) -> Option<usize> {
+        (from + 1..self.tiles.len()).find(|&idx| !self.tiles[idx].window().is_minimized())
+    }
+
     fn focus_up(&mut self) -> bool {
-        self.activate_idx(self.active_tile_idx.saturating_sub(1))
+        let Some(idx) = self.prev_visible_tile_idx(self.active_tile_idx) else {
+            return false;
+        };
+        self.activate_idx(idx)
     }
 
     fn focus_down(&mut self) -> bool {
-        self.activate_idx(min(self.active_tile_idx + 1, self.tiles.len() - 1))
+        let Some(idx) = self.next_visible_tile_idx(self.active_tile_idx) else {
+            return false;
+        };
+        self.activate_idx(idx)
     }
 
     fn focus_top(&mut self) {
-        self.activate_idx(0);
+        let idx = self.visible_tile_indices().next();
+        if let Some(idx) = idx {
+            self.activate_idx(idx);
+        }
     }
 
     fn focus_bottom(&mut self) {
-        self.activate_idx(self.tiles.len() - 1);
+        let idx = self.visible_tile_indices().last();
+        if let Some(idx) = idx {
+            self.activate_idx(idx);
+        }
     }
 
     fn move_up(&mut self) -> bool {
@@ -5831,7 +6032,7 @@ impl<W: LayoutElement> Column<W> {
                 pos.x += tiles_width - data.size.w;
             }
 
-            if !tabbed {
+            if !tabbed && data.size.h > 0. {
                 origin.y += data.size.h + gaps;
             }
 
@@ -5903,11 +6104,13 @@ impl<W: LayoutElement> Column<W> {
         let (first, rest) = self.tiles.split_at(self.active_tile_idx);
         let (active, rest) = rest.split_at(1);
 
-        let active = active.iter().map(|tile| (tile, true));
+        let active = active
+            .iter()
+            .map(|tile| (tile, !tile.window().is_minimized()));
 
         let rest_visible = self.display_mode != ColumnDisplay::Tabbed;
         let rest = first.iter().chain(rest);
-        let rest = rest.map(move |tile| (tile, rest_visible));
+        let rest = rest.map(move |tile| (tile, rest_visible && !tile.window().is_minimized()));
 
         let tiles = active.chain(rest);
         zip(tiles, offsets).map(|((tile, visible), pos)| (tile, pos, visible))
@@ -6014,10 +6217,14 @@ impl<W: LayoutElement> Column<W> {
             assert!(Rc::ptr_eq(&self.options, &tile.options));
             assert_eq!(self.clock, tile.clock);
             assert_eq!(self.scale, tile.scale());
-            assert_eq!(
-                self.pending_sizing_mode(),
-                tile.window().pending_sizing_mode()
-            );
+            // Minimized tiles receive no configures, so their pending sizing mode may lag
+            // behind column changes until they are restored.
+            if !tile.window().is_minimized() {
+                assert_eq!(
+                    self.pending_sizing_mode(),
+                    tile.window().pending_sizing_mode()
+                );
+            }
             assert_eq!(self.view_size, tile.view_size());
             tile.verify_invariants();
 
@@ -6035,6 +6242,12 @@ impl<W: LayoutElement> Column<W> {
 
             if let WindowHeight::Preset(idx) = data.height {
                 assert!(self.options.layout.preset_window_heights.len() > idx);
+            }
+
+            // Minimized tiles keep their pre-minimize size and receive no configures, so
+            // their requested size may predate config changes and they occupy no height.
+            if tile.window().is_minimized() {
+                continue;
             }
 
             let requested_size = tile.window().requested_size().unwrap();

@@ -35,11 +35,24 @@ use crate::utils::{
     baba_is_float_offset, round_logical_in_physical, round_logical_in_physical_max1,
 };
 
+static MINIMIZE_SEQ_COUNTER: crate::utils::id::IdCounter = crate::utils::id::IdCounter::new();
+
+/// Returns the next most-recently-minimized ordering value.
+pub(super) fn next_minimize_seq() -> u64 {
+    MINIMIZE_SEQ_COUNTER.next()
+}
+
 /// Toplevel window with decorations.
 #[derive(Debug)]
 pub struct Tile<W: LayoutElement> {
     /// The toplevel window itself.
     window: W,
+
+    /// Monotonic sequence number assigned when this tile's window was minimized, if it is.
+    ///
+    /// The minimized state itself lives on the window ([`LayoutElement::is_minimized`]); this
+    /// sequence provides most-recently-minimized ordering for restore.
+    pub(super) minimized_at: Option<u64>,
 
     /// The border around the window.
     border: FocusRing,
@@ -190,6 +203,7 @@ impl<W: LayoutElement> Tile<W> {
 
         Self {
             window,
+            minimized_at: None,
             border: FocusRing::new(border_config.into()),
             focus_ring: FocusRing::new(focus_ring_config),
             shadow: Shadow::new(shadow_config),

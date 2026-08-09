@@ -4088,6 +4088,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn set_fullscreen(&mut self, id: &W::Id, is_fullscreen: bool) {
+        if self.is_window_minimized(id) {
+            return;
+        }
         // Check if this is a request to unset the windowed fullscreen state.
         if !is_fullscreen {
             let mut handled = false;
@@ -4109,12 +4112,6 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         for ws in self.workspaces_mut() {
-            // The detached tile of a minimized window cannot change sizing mode; record the
-            // request for when the window is restored.
-            if ws.has_minimized_window(id) {
-                ws.update_minimized_restore_state(id, Some(is_fullscreen), None);
-                return;
-            }
             if ws.has_window(id) {
                 ws.set_fullscreen(id, is_fullscreen);
                 return;
@@ -4123,6 +4120,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn toggle_fullscreen(&mut self, id: &W::Id) {
+        if self.is_window_minimized(id) {
+            return;
+        }
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if move_.tile.window().id() == id {
                 return;
@@ -4130,12 +4130,6 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         for ws in self.workspaces_mut() {
-            if ws.has_minimized_window(id) {
-                if let Some((was_fullscreen, _)) = ws.minimized_restore_state(id) {
-                    ws.update_minimized_restore_state(id, Some(!was_fullscreen), None);
-                }
-                return;
-            }
             if ws.has_window(id) {
                 ws.toggle_fullscreen(id);
                 return;
@@ -4167,6 +4161,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn set_maximized(&mut self, id: &W::Id, maximize: bool) {
+        if self.is_window_minimized(id) {
+            return;
+        }
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if move_.tile.window().id() == id {
                 return;
@@ -4174,10 +4171,6 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         for ws in self.workspaces_mut() {
-            if ws.has_minimized_window(id) {
-                ws.update_minimized_restore_state(id, None, Some(maximize));
-                return;
-            }
             if ws.has_window(id) {
                 ws.set_maximized(id, maximize);
                 return;
@@ -4186,15 +4179,15 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn is_window_minimized(&self, id: &W::Id) -> bool {
-        self.workspaces()
-            .any(|(_, _, ws)| ws.has_minimized_window(id))
+        self.windows()
+            .any(|(_, win)| win.id() == id && win.is_minimized())
     }
 
     /// Whether this window is minimized and currently invisible (its workspace's grid overview is
     /// closed, so not even a thumbnail of it is on screen).
     pub fn is_window_minimized_hidden(&self, id: &W::Id) -> bool {
         self.workspaces()
-            .any(|(_, _, ws)| ws.has_minimized_window(id) && !ws.is_grid_overview_open())
+            .any(|(_, _, ws)| !ws.is_grid_overview_open() && ws.has_minimized_window(id))
     }
 
     /// Whether the grid overview is open on the monitor of this output.
@@ -4209,34 +4202,7 @@ impl<W: LayoutElement> Layout<W> {
         false
     }
 
-    /// Id of the most recently minimized window across all workspaces.
-    pub fn last_minimized_window(&self) -> Option<W::Id> {
-        self.workspaces()
-            .filter_map(|(_, _, ws)| {
-                let (id, at) = ws.last_minimized_window()?;
-                Some((id.clone(), at))
-            })
-            .max_by_key(|(_, at)| *at)
-            .map(|(id, _)| id)
-    }
-
     pub fn set_window_minimized(&mut self, id: &W::Id, minimize: bool) {
-        if minimize {
-            self.minimize_window(id);
-        } else {
-            self.unminimize_window(id, true);
-        }
-    }
-
-    pub fn toggle_window_minimized(&mut self, id: &W::Id) {
-        if self.is_window_minimized(id) {
-            self.unminimize_window(id, true);
-        } else {
-            self.minimize_window(id);
-        }
-    }
-
-    fn minimize_window(&mut self, id: &W::Id) {
         // Can't minimize a window that is being interactively moved (including a move that
         // hasn't crossed the drag threshold yet).
         match &self.interactive_move {
@@ -4249,78 +4215,46 @@ impl<W: LayoutElement> Layout<W> {
             _ => {}
         }
 
-        let Some(ws) = self.workspaces_mut().find(|ws| ws.has_window(id)) else {
-            return;
-        };
-
-        if ws.has_minimized_window(id) {
-            return;
+        for ws in self.workspaces_mut() {
+            if ws.has_window(id) {
+                ws.set_window_minimized(id, minimize);
+                return;
+            }
         }
-
-        // Remember and unset fullscreen/maximized state so that the tile detaches at its normal
-        // size; it is re-applied on restore. This mirrors what interactive move does.
-        let (was_fullscreen, was_maximized) = ws
-            .windows()
-            .find(|w| w.id() == id)
-            .map(|w| {
-                let mode = w.pending_sizing_mode();
-                (mode.is_fullscreen(), mode.is_maximized())
-            })
-            .unwrap_or((false, false));
-        if was_fullscreen {
-            ws.set_fullscreen(id, false);
-        }
-        if was_maximized {
-            ws.set_maximized(id, false);
-        }
-
-        // With the grid overview open, the item morphs from a normal window into a minimized
-        // thumbnail; capture the visuals so the transition is continuous.
-        let snapshots = ws.grid_window_visual_snapshots();
-
-        if !ws.minimize_window(id, was_fullscreen, was_maximized) {
-            return;
-        }
-
-        ws.refresh_grid_overview_after_action(None, false, snapshots);
     }
 
-    /// Restores a minimized window into its workspace.
-    ///
-    /// When `activate` is set, also focuses the window, switching the active monitor and
-    /// workspace if necessary.
-    pub fn unminimize_window(&mut self, id: &W::Id, activate: bool) {
-        let Some(ws) = self.workspaces_mut().find(|ws| ws.has_minimized_window(id)) else {
-            return;
-        };
-
-        let activate_window = if activate {
-            ActivateWindow::Yes
+    pub fn toggle_window_minimized(&mut self, id: &W::Id) {
+        if self.is_window_minimized(id) {
+            self.unminimize_window(id, true);
         } else {
-            ActivateWindow::No
-        };
-
-        // With the grid overview open, animate the restored window from its thumbnail cell.
-        let snapshots = ws.grid_window_visual_snapshots();
-
-        let Some((was_fullscreen, was_maximized)) = ws.unminimize_window(id, activate_window)
-        else {
-            return;
-        };
-
-        ws.refresh_grid_overview_after_action(Some(id), false, snapshots);
-
-        if was_fullscreen {
-            self.set_fullscreen(id, true);
-        } else if was_maximized {
-            self.set_maximized(id, true);
+            self.set_window_minimized(id, true);
         }
+    }
 
-        self.start_open_animation_for_window(id);
-
+    /// Restores a minimized window, optionally focusing it (switching the active monitor and
+    /// workspace if necessary).
+    pub fn unminimize_window(&mut self, id: &W::Id, activate: bool) {
         if activate {
+            // Activation restores minimized windows on its way.
             self.activate_window(id);
+        } else {
+            self.set_window_minimized(id, false);
         }
+    }
+
+    /// Id of the most recently minimized window across all workspaces.
+    pub fn last_minimized_window(&self) -> Option<W::Id> {
+        let mut best: Option<(W::Id, u64)> = None;
+        for (_, _, ws) in self.workspaces() {
+            for tile in ws.tiles() {
+                if let Some(at) = tile.minimized_at {
+                    if best.as_ref().is_none_or(|(_, best_at)| at > *best_at) {
+                        best = Some((tile.window().id().clone(), at));
+                    }
+                }
+            }
+        }
+        best.map(|(id, _)| id)
     }
 
     /// Restores the most recently minimized window.
@@ -4331,6 +4265,9 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn toggle_maximized(&mut self, id: &W::Id) {
+        if self.is_window_minimized(id) {
+            return;
+        }
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if move_.tile.window().id() == id {
                 return;
@@ -4338,12 +4275,6 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         for ws in self.workspaces_mut() {
-            if ws.has_minimized_window(id) {
-                if let Some((_, was_maximized)) = ws.minimized_restore_state(id) {
-                    ws.update_minimized_restore_state(id, None, Some(!was_maximized));
-                }
-                return;
-            }
             if ws.has_window(id) {
                 ws.toggle_maximized(id);
                 return;
@@ -4560,7 +4491,7 @@ impl<W: LayoutElement> Layout<W> {
         output: &Output,
         start_pos_within_output: Point<f64, Logical>,
     ) -> bool {
-        // Minimized windows have no on-screen position to interact with.
+        // Minimized windows have no on-screen presence to interact with.
         if self.is_window_minimized(&window_id) {
             return false;
         }
@@ -5213,7 +5144,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn interactive_resize_begin(&mut self, window: W::Id, edges: ResizeEdge) -> bool {
-        // Minimized windows have no on-screen position to interact with.
+        // Minimized windows have no on-screen presence to interact with.
         if self.is_window_minimized(&window) {
             return false;
         }

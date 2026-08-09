@@ -1699,6 +1699,9 @@ impl Op {
 #[track_caller]
 fn check_ops_on_layout(layout: &mut Layout<TestWindow>, ops: impl IntoIterator<Item = Op>) {
     for op in ops {
+        if std::env::var_os("NIRI_TEST_TRACE_OPS").is_some() {
+            eprintln!("OP {op:?}");
+        }
         op.apply(layout);
         layout.verify_invariants();
     }
