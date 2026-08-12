@@ -466,10 +466,23 @@ impl<W: LayoutElement> Workspace<W> {
             };
             go.toggle();
 
-            for win in self.windows_mut() {
-                if win.is_minimized() {
-                    win.set_suspended(true);
-                }
+            // Minimized windows become suspended again on their next commit
+            // (suspend_minimized_hidden), so that a pending resize doesn't get stuck
+            // behind a client that stops rendering as soon as it's told it's hidden.
+        }
+    }
+
+    /// Marks a minimized window as suspended once the grid overview no longer shows it.
+    ///
+    /// Called on client commits. Deferring suspension to commit time makes sure the client
+    /// has acked and committed the last configure before it stops rendering.
+    pub fn suspend_minimized_hidden(&mut self, id: &W::Id) {
+        if self.is_grid_overview_open() {
+            return;
+        }
+        for win in self.windows_mut() {
+            if win.id() == id && win.is_minimized() {
+                win.set_suspended(true);
             }
         }
     }
@@ -3215,10 +3228,14 @@ impl<W: LayoutElement> Workspace<W> {
             return false;
         }
 
-        // Suspended clients stop rendering; lifted while the grid shows live previews.
-        let suspend = minimize && !self.is_grid_overview_open();
-        if let Some(win) = self.windows_mut().find(|win| win.id() == id) {
-            win.set_suspended(suspend);
+        // Restoring lifts the suspended hint right away. Suspending is deferred until the
+        // client's next commit (Layout::suspend_minimized_hidden): clients like Chromium stop
+        // rendering once suspended, which would leave the minimize configure (e.g. the
+        // default-size resize when expelling out of a multi-window column) un-acked forever.
+        if !minimize {
+            if let Some(win) = self.windows_mut().find(|win| win.id() == id) {
+                win.set_suspended(false);
+            }
         }
 
         // Keep focus on the side that still has a visible active window.

@@ -6047,16 +6047,22 @@ impl<W: LayoutElement> Column<W> {
         // a tile is added to, or removed from, the column) don't produce transient grid overview
         // layouts that snap back once the clients commit.
         //
-        // This also covers placeholder columns: a window minimized out of a multi-window column
-        // is sized as the default-width column it will restore into, so its expected size is
-        // exactly the restored column size.
+        // Minimized tiles are the exception: their pending resize (the default-size configure
+        // when expelling out of a multi-window column) can stay un-acked indefinitely, since the
+        // client may have stopped rendering. The surface draws at the committed size, so size the
+        // grid cell from the committed size too; when the ack does come in, update_window()
+        // recomputes the grid and the rearrange animation carries the cell to the new size.
         let gaps = self.options.layout.gaps;
         let tabbed = self.display_mode == ColumnDisplay::Tabbed;
 
         let mut width = 0.0_f64;
         let mut height = 0.0_f64;
         for (idx, tile) in self.tiles.iter().enumerate() {
-            let size = tile.tile_expected_or_current_size();
+            let size = if tile.window().is_minimized() {
+                tile.tile_size()
+            } else {
+                tile.tile_expected_or_current_size()
+            };
             width = width.max(size.w);
             if tabbed {
                 height = height.max(size.h);

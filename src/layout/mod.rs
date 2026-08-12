@@ -4190,6 +4190,17 @@ impl<W: LayoutElement> Layout<W> {
             .any(|(_, _, ws)| !ws.is_grid_overview_open() && ws.has_minimized_window(id))
     }
 
+    /// Marks a hidden minimized window as suspended, on client commit.
+    ///
+    /// Suspension is deferred to commit time so that the configure from a minimize (e.g. the
+    /// default-size resize when expelling out of a multi-window column) gets acked and
+    /// committed before the client stops rendering.
+    pub fn suspend_minimized_hidden(&mut self, id: &W::Id) {
+        for ws in self.workspaces_mut() {
+            ws.suspend_minimized_hidden(id);
+        }
+    }
+
     /// Whether the grid overview is open on the monitor of this output.
     ///
     /// While it is open, minimized windows on the output show live previews.
