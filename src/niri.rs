@@ -6506,7 +6506,13 @@ impl Niri {
                 );
                 continue;
             }
-            if minimized_grid_previews && mapped.is_minimized() {
+            // Fast-track callbacks also flow to minimized windows that haven't been suspended
+            // yet: their client may still be responding to the minimize configure (e.g. the
+            // default-size resize when expelling out of a multi-window column), and
+            // callback-paced clients like Chromium won't commit it on idle throttling alone.
+            // The commit suspends them (suspend_minimized_hidden), dropping them back to the
+            // regular throttling.
+            if mapped.is_minimized() && (minimized_grid_previews || !mapped.is_suspended()) {
                 mapped.send_frame(
                     output,
                     frame_callback_time,

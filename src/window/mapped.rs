@@ -626,6 +626,10 @@ impl Mapped {
     pub fn is_minimized(&self) -> bool {
         self.is_minimized
     }
+
+    pub fn is_suspended(&self) -> bool {
+        self.is_suspended
+    }
 }
 
 impl Drop for Mapped {

@@ -372,9 +372,17 @@ impl CompositorHandler for State {
                 self.niri.window_mru_ui.update_window(&self.niri.layout, id);
                 self.niri.layout.update_window(&window, serial);
 
-                // A hidden minimized window has committed (e.g. acked the minimize resize), so
-                // it's now safe to tell it to stop rendering.
-                self.niri.layout.suspend_minimized_hidden(&window);
+                // A hidden minimized window that has caught up with its configures (e.g.
+                // committed the minimize resize) can be told to stop rendering. Don't suspend
+                // it earlier: clients like Chromium stop rendering once suspended, which would
+                // leave the pending resize un-acked forever.
+                let caught_up = crate::utils::with_toplevel_last_uncommitted_configure(
+                    window.toplevel().expect("no x11 support"),
+                    |configure| configure.is_none(),
+                );
+                if caught_up {
+                    self.niri.layout.suspend_minimized_hidden(&window);
+                }
 
                 // Move the toplevel according to the attach offset.
                 if let Some(delta) = buffer_delta {
