@@ -2751,8 +2751,7 @@ impl<W: LayoutElement> Workspace<W> {
                                 is_focused && is_grid_focused,
                                 false,
                                 false,
-                                // Minimized tiles keep their dim in the grid.
-                                !preview_tile.tile.window().is_minimized(),
+                                true,
                             );
                         }
                     }
@@ -2782,8 +2781,7 @@ impl<W: LayoutElement> Workspace<W> {
                                 is_focused && preview_tile.tile.window().id() == window_id,
                                 suppress_decorations,
                                 suppress_shadow,
-                                // Minimized tiles keep their dim in the grid.
-                                !preview_tile.tile.window().is_minimized(),
+                                true,
                             );
                         }
 

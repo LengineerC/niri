@@ -2271,6 +2271,32 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             tile.window_mut().set_minimized(true);
             tile.minimized_at = Some(super::tile::next_minimize_seq());
 
+            // A window expelled out of a multi-window column becomes a new default-width
+            // column; size the window as such right away, so that its grid thumbnail matches
+            // what it restores into. (A solo window keeps its column untouched.)
+            let (width, is_full_width) = if solo {
+                (width, is_full_width)
+            } else {
+                let width = ColumnWidth::from(
+                    self.options
+                        .layout
+                        .default_column_width
+                        .unwrap_or(PresetSize::Proportion(0.5)),
+                );
+                let gaps = self.options.layout.gaps;
+                let resolved_w = match width {
+                    ColumnWidth::Proportion(p) => (self.working_area.size.w - gaps) * p - gaps,
+                    ColumnWidth::Fixed(w) => w,
+                };
+                let resolved_h = self.working_area.size.h - gaps * 2.;
+                tile.request_tile_size(
+                    Size::from((resolved_w.max(1.), resolved_h.max(1.))),
+                    false,
+                    None,
+                );
+                (width, false)
+            };
+
             self.add_tile(Some(insert_idx), tile, false, width, is_full_width, None);
         } else {
             let removed = self.remove_tile_by_idx(col_idx, tile_idx, Transaction::new(), None);
@@ -6017,22 +6043,13 @@ impl<W: LayoutElement> Column<W> {
     }
 
     fn grid_preview_target_size(&self) -> Size<f64, Logical> {
-        // Placeholder columns are sized as the column they will restore into, so that the grid
-        // doesn't inflate their frozen (possibly half-height) window size to the row height.
-        if !self.has_visible_tiles() {
-            let width = if self.is_full_width {
-                ColumnWidth::Proportion(1.)
-            } else {
-                self.width
-            };
-            let width = self.resolve_column_width(width);
-            let height = self.working_area.size.h - self.options.layout.gaps * 2.;
-            return Size::from((width.max(1.), height.max(1.)));
-        }
-
         // Use expected sizes rather than current ones, so that pending resizes (e.g. right after
         // a tile is added to, or removed from, the column) don't produce transient grid overview
         // layouts that snap back once the clients commit.
+        //
+        // This also covers placeholder columns: a window minimized out of a multi-window column
+        // is sized as the default-width column it will restore into, so its expected size is
+        // exactly the restored column size.
         let gaps = self.options.layout.gaps;
         let tabbed = self.display_mode == ColumnDisplay::Tabbed;
 
