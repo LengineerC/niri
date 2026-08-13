@@ -483,7 +483,20 @@ impl<W: LayoutElement> Workspace<W> {
         }
         for win in self.windows_mut() {
             if win.id() == id && win.is_minimized() {
-                win.set_suspended(true);
+                // Don't suspend until the window has actually resized to what we requested (e.g.
+                // the default-size configure when expelling out of a multi-window column).
+                // Suspending mid-resize would freeze a callback-paced client (Chromium/VS Code)
+                // before it commits the new size, leaving it stuck at the old (e.g. half) size in
+                // the grid thumbnail. Allow a small slack so clients that quantize their size
+                // (e.g. terminals sizing to whole cells) still settle and get suspended.
+                const SLACK: i32 = 8;
+                let settled = win.expected_size().is_none_or(|exp| {
+                    let cur = win.size();
+                    (exp.w - cur.w).abs() < SLACK && (exp.h - cur.h).abs() < SLACK
+                });
+                if settled {
+                    win.set_suspended(true);
+                }
             }
         }
     }
