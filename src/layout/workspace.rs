@@ -2774,17 +2774,21 @@ impl<W: LayoutElement> Workspace<W> {
                                 let ats = t.animated_tile_size();
                                 let bl = t.window().buf_loc();
                                 let wl = t.window_loc();
+                                let req = t.window().requested_size();
+                                let exp = t.window().expected_size();
                                 let ip = tile_visual_pos - preview_tile.pos.upscale(tile_visual_scale);
                                 debug!(
                                     target: "niri::mindbg",
-                                    "grid col={} min={} win.size={}x{} buf_loc={},{} \
-                                     tile_size={:.1}x{:.1} anim_tile={:.1}x{:.1} resize_anim={} \
-                                     win_loc={:.2},{:.2} target_size={:.1}x{:.1} vscale={:.4} \
-                                     tvscale={:.4} rel_pos={:.1},{:.1} item_vis_pos={:.2},{:.2} \
-                                     out_scale={}",
+                                    "grid col={} min={} win.size={}x{} requested={:?} expected={:?} \
+                                     buf_loc={},{} tile_size={:.1}x{:.1} anim_tile={:.1}x{:.1} \
+                                     resize_anim={} win_loc={:.2},{:.2} target_size={:.1}x{:.1} \
+                                     vscale={:.4} tvscale={:.4} rel_pos={:.1},{:.1} \
+                                     item_vis_pos={:.2},{:.2} out_scale={}",
                                     col_idx,
                                     t.window().is_minimized(),
                                     ws.w, ws.h,
+                                    req,
+                                    exp,
                                     bl.x, bl.y,
                                     ts.w, ts.h,
                                     ats.w, ats.h,

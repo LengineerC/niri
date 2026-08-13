@@ -2280,10 +2280,34 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             tile.window_mut().set_minimized(true);
             tile.minimized_at = Some(super::tile::next_minimize_seq());
 
-            // A window expelled out of a multi-window column becomes a new default-width
-            // column; size the window as such right away, so that its grid thumbnail matches
-            // what it restores into. (A solo window keeps its column untouched.)
+            // Size the minimized window so its grid thumbnail matches a normal full-height
+            // column, like every other minimized window. A solo window keeps its own width
+            // and column position but is filled to full height (many windows sit at less than
+            // full height — presets, manual resizes, short auto columns — and would otherwise
+            // show as a stunted thumbnail among full-height ones). A window expelled out of a
+            // multi-window column additionally takes the default column width.
             let (width, is_full_width) = if solo {
+                // Fullscreen/maximized windows keep their special sizing (a resize request here
+                // would drop them out of it); everything else is filled to full height.
+                if tile.sizing_mode().is_normal() {
+                    let gaps = self.options.layout.gaps;
+                    let resolved_h = self.working_area.size.h - gaps * 2.;
+                    let cur_w = tile.tile_size().w;
+                    if std::env::var_os("NIRI_MINDBG").is_some() {
+                        debug!(
+                            target: "niri::mindbg",
+                            "solo-minimize fill-height: orig_tile_size={:?} -> request {:.1}x{:.1}",
+                            tile.tile_size(),
+                            cur_w.max(1.),
+                            resolved_h.max(1.),
+                        );
+                    }
+                    tile.request_tile_size(
+                        Size::from((cur_w.max(1.), resolved_h.max(1.))),
+                        false,
+                        None,
+                    );
+                }
                 (width, is_full_width)
             } else {
                 let width = ColumnWidth::from(
@@ -2298,6 +2322,19 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     ColumnWidth::Fixed(w) => w,
                 };
                 let resolved_h = self.working_area.size.h - gaps * 2.;
+                if std::env::var_os("NIRI_MINDBG").is_some() {
+                    debug!(
+                        target: "niri::mindbg",
+                        "expel-resize: was_solo={} orig_tile_size={:?} working_area={:?} \
+                         gaps={} -> request {:.1}x{:.1}",
+                        solo,
+                        tile.tile_size(),
+                        self.working_area.size,
+                        gaps,
+                        resolved_w.max(1.),
+                        resolved_h.max(1.),
+                    );
+                }
                 tile.request_tile_size(
                     Size::from((resolved_w.max(1.), resolved_h.max(1.))),
                     false,
