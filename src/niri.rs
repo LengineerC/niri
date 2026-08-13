@@ -6444,6 +6444,7 @@ impl Niri {
     pub fn send_frame_callbacks(&mut self, output: &Output) {
         let _span = tracy_client::span!("Niri::send_frame_callbacks");
 
+        let mindbg = std::env::var_os("NIRI_MINDBG").is_some();
         let state = self.output_state.get(output).unwrap();
         let sequence = state.frame_callback_sequence;
 
@@ -6513,6 +6514,17 @@ impl Niri {
             // The commit suspends them (suspend_minimized_hidden), dropping them back to the
             // regular throttling.
             if mapped.is_minimized() && (minimized_grid_previews || !mapped.is_suspended()) {
+                if mindbg {
+                    debug!(
+                        target: "niri::mindbg",
+                        "frame->min id={:?} out={} suspended={} grid_preview={} size={:?}",
+                        mapped.id(),
+                        output.name(),
+                        mapped.is_suspended(),
+                        minimized_grid_previews,
+                        mapped.window.geometry().size,
+                    );
+                }
                 mapped.send_frame(
                     output,
                     frame_callback_time,

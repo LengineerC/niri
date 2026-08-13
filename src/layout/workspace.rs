@@ -19,6 +19,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
+use tracing::debug;
 
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::grid_overview::{GridDirection, GridEntryInfo, GridItem, GridOverview};
@@ -2571,6 +2572,7 @@ impl<W: LayoutElement> Workspace<W> {
     ) {
         let scale = self.scale.fractional_scale();
         let overview_zoom = base_xray_pos.zoom;
+        let mindbg = std::env::var_os("NIRI_MINDBG").is_some();
 
         let go = match &self.grid_overview {
             Some(g) => g,
@@ -2745,6 +2747,32 @@ impl<W: LayoutElement> Workspace<W> {
                         // edge cleanly reveals the new window as the sizes settle.
                         for preview_tile in preview.tiles.into_iter().rev() {
                             let is_grid_focused = preview_tile.tile_idx == grid_tile_idx;
+                            if mindbg && preview_tile.tile.window().is_minimized() {
+                                let t = preview_tile.tile;
+                                let ws = t.window().size();
+                                let ts = t.tile_size();
+                                let ats = t.animated_tile_size();
+                                let bl = t.window().buf_loc();
+                                let wl = t.window_loc();
+                                debug!(
+                                    target: "niri::mindbg",
+                                    "grid col_idx={} win.size={}x{} buf_loc={},{} \
+                                     tile_size={:.1}x{:.1} anim_tile={:.1}x{:.1} resize_anim={} \
+                                     win_loc={:.2},{:.2} target_size={:.1}x{:.1} vscale={:.4} \
+                                     rel_pos={:.1},{:.1} out_scale={}",
+                                    col_idx,
+                                    ws.w, ws.h,
+                                    bl.x, bl.y,
+                                    ts.w, ts.h,
+                                    ats.w, ats.h,
+                                    t.resize_animation().is_some(),
+                                    wl.x, wl.y,
+                                    info.target_size.w, info.target_size.h,
+                                    visual_scale,
+                                    preview_tile.pos.x, preview_tile.pos.y,
+                                    scale,
+                                );
+                            }
                             let target_tile_pos =
                                 visual_pos + preview_tile.pos.upscale(visual_scale);
                             let (tile_visual_pos, tile_visual_scale) = go.window_visual_transform(
