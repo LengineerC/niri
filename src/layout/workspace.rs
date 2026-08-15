@@ -936,7 +936,10 @@ impl<W: LayoutElement> Workspace<W> {
 
         if let Some(id) = previous_focus {
             if self.set_grid_focus_for_window(&id) {
-                self.set_grid_window_transition_starts(window_visual_snapshots, rearrange_restarted);
+                self.set_grid_window_transition_starts(
+                    window_visual_snapshots,
+                    rearrange_restarted,
+                );
                 return;
             }
         }
@@ -1277,6 +1280,14 @@ impl<W: LayoutElement> Workspace<W> {
         };
 
         self.set_grid_focus_for_window(&id);
+    }
+
+    pub(super) fn sync_grid_focus_to_active_window_without_animation(&mut self) {
+        let Some(id) = self.active_window().map(|w| w.id().clone()) else {
+            return;
+        };
+
+        self.set_grid_focus_for_window_without_animation(&id);
     }
 
     pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {

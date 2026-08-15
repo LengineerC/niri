@@ -2209,6 +2209,11 @@ impl<W: LayoutElement> Layout<W> {
             workspace.grid_navigate(GridDirection::Left);
             return;
         }
+        if workspace.is_grid_overview_animation() {
+            workspace.focus_left();
+            workspace.sync_grid_focus_to_active_window_without_animation();
+            return;
+        }
         workspace.focus_left();
     }
 
@@ -2218,6 +2223,11 @@ impl<W: LayoutElement> Layout<W> {
         };
         if workspace.is_grid_overview_open() {
             workspace.grid_navigate(GridDirection::Right);
+            return;
+        }
+        if workspace.is_grid_overview_animation() {
+            workspace.focus_right();
+            workspace.sync_grid_focus_to_active_window_without_animation();
             return;
         }
         workspace.focus_right();
@@ -2264,6 +2274,15 @@ impl<W: LayoutElement> Layout<W> {
                 workspace.grid_navigate(GridDirection::Up);
                 return false;
             }
+            if workspace.is_grid_overview_animation() {
+                let moved = workspace.focus_up();
+                workspace.sync_grid_focus_to_active_window_without_animation();
+                if moved {
+                    return false;
+                }
+                self.focus_output(output);
+                return true;
+            }
             if workspace.focus_up() {
                 return false;
             }
@@ -2278,6 +2297,15 @@ impl<W: LayoutElement> Layout<W> {
             if workspace.is_grid_overview_open() {
                 workspace.grid_navigate(GridDirection::Down);
                 return false;
+            }
+            if workspace.is_grid_overview_animation() {
+                let moved = workspace.focus_down();
+                workspace.sync_grid_focus_to_active_window_without_animation();
+                if moved {
+                    return false;
+                }
+                self.focus_output(output);
+                return true;
             }
             if workspace.focus_down() {
                 return false;
@@ -2325,6 +2353,11 @@ impl<W: LayoutElement> Layout<W> {
             workspace.grid_navigate(GridDirection::Down);
             return;
         }
+        if workspace.is_grid_overview_animation() {
+            workspace.focus_down();
+            workspace.sync_grid_focus_to_active_window_without_animation();
+            return;
+        }
         workspace.focus_down();
     }
 
@@ -2334,6 +2367,11 @@ impl<W: LayoutElement> Layout<W> {
         };
         if workspace.is_grid_overview_open() {
             workspace.grid_navigate(GridDirection::Up);
+            return;
+        }
+        if workspace.is_grid_overview_animation() {
+            workspace.focus_up();
+            workspace.sync_grid_focus_to_active_window_without_animation();
             return;
         }
         workspace.focus_up();

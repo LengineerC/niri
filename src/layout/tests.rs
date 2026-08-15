@@ -5816,6 +5816,78 @@ fn grid_move_column_triple_reversal_keeps_visual_continuity() {
 }
 
 #[test]
+fn grid_focus_moves_real_focus_during_close_animation() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(4),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(5),
+        },
+        Op::FocusWindow(1),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    layout.close_grid_overview();
+    layout.clock.set_unadjusted(Duration::from_millis(20));
+    layout.advance_animations();
+
+    let before = layout.focus().map(|w| *w.id());
+    layout.focus_right();
+
+    assert_ne!(layout.focus().map(|w| *w.id()), before);
+    assert_eq!(
+        layout.grid_focused_window_id(),
+        layout.focus().map(|w| *w.id())
+    );
+}
+
+#[test]
+fn grid_focus_navigation_works_during_close_animation() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::FocusWindow(1),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    layout.close_grid_overview();
+    layout.clock.set_unadjusted(Duration::from_millis(20));
+    layout.advance_animations();
+
+    let before = layout.grid_focused_window_id();
+    layout.focus_right();
+    let after = layout.grid_focused_window_id();
+
+    assert_ne!(before, after);
+    assert!(layout
+        .active_workspace()
+        .unwrap()
+        .grid_overview()
+        .is_some_and(|go| !go.open));
+}
+
+#[test]
 fn grid_noop_action_preserves_ongoing_focus_boost() {
     let mut layout = check_ops([
         Op::AddOutput(1),

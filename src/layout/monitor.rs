@@ -826,9 +826,15 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn focus_window_or_workspace_down(&mut self) {
-        let grid_open = self.active_workspace_ref().is_grid_overview_open();
-        if grid_open {
+        if self.active_workspace_ref().is_grid_overview_open() {
             if !self.active_workspace().grid_navigate(GridDirection::Down) {
+                self.switch_workspace_down();
+            }
+        } else if self.active_workspace_ref().is_grid_overview_animation() {
+            let moved = self.active_workspace().focus_down();
+            self.active_workspace()
+                .sync_grid_focus_to_active_window_without_animation();
+            if !moved {
                 self.switch_workspace_down();
             }
         } else if !self.active_workspace().focus_down() {
@@ -837,9 +843,15 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn focus_window_or_workspace_up(&mut self) {
-        let grid_open = self.active_workspace_ref().is_grid_overview_open();
-        if grid_open {
+        if self.active_workspace_ref().is_grid_overview_open() {
             if !self.active_workspace().grid_navigate(GridDirection::Up) {
+                self.switch_workspace_up();
+            }
+        } else if self.active_workspace_ref().is_grid_overview_animation() {
+            let moved = self.active_workspace().focus_up();
+            self.active_workspace()
+                .sync_grid_focus_to_active_window_without_animation();
+            if !moved {
                 self.switch_workspace_up();
             }
         } else if !self.active_workspace().focus_up() {
