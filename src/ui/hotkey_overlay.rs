@@ -212,6 +212,7 @@ fn collect_actions(config: &Config) -> Vec<&Action> {
 
     actions.extend(&[
         &Action::CloseWindow,
+        &Action::MinimizeWindow,
         &Action::FocusColumnLeft,
         &Action::FocusColumnRight,
         &Action::MoveColumnLeft,

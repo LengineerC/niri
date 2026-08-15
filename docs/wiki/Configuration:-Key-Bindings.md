@@ -176,6 +176,19 @@ Run `niri msg action` to get a full list of actions along with their short descr
 
 Here are a few actions that benefit from more explanation.
 
+#### `minimize-window`
+
+Minimize the focused window.
+
+```kdl
+binds {
+    Mod+N { minimize-window; }
+}
+```
+
+The minimized window stays in the layout as a placeholder and is shown in the grid overview.
+Use `unminimize-window` to restore the most recently minimized window, or `toggle-window-minimized` to switch between the two states.
+
 #### `spawn`
 
 Run a program.
