@@ -2338,6 +2338,7 @@ dependencies = [
  "libadwaita",
  "niri",
  "niri-config",
+ "png 0.18.1",
  "smithay",
  "tracing",
  "tracing-subscriber",

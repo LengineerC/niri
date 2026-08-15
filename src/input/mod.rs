@@ -675,7 +675,10 @@ impl State {
                     }
                 }
 
-                if pressed && raw == Some(Keysym::Return) {
+                // Return is the hardcoded grid-activation key only when pressed without
+                // modifiers. With modifiers held (e.g. Mod+Return bound to a user action), the
+                // configured binding below must take precedence.
+                if pressed && modifiers.is_empty() && raw == Some(Keysym::Return) {
                     if grid_should_confirm_on_return(
                         is_grid_overview_open,
                         &this.niri.keyboard_focus,

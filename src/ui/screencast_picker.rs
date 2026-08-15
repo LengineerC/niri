@@ -1,3 +1,9 @@
+use std::time::Duration;
+
+/// Frame-callback interval used for live previews which are rendered by the compositor
+/// but are not part of the regular scanout loop.
+pub const PREVIEW_FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
+
 #[cfg(not(feature = "xdp-gnome-screencast"))]
 mod disabled {
     use crate::layout::LayoutElementRenderElement;
@@ -34,6 +40,7 @@ mod enabled {
     use smithay::output::{Output, WeakOutput};
     use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
+    use super::PREVIEW_FRAME_INTERVAL;
     use crate::animation::{Animation, Clock};
     use crate::dbus::mutter_screen_cast::StreamTargetId;
     use crate::dbus::niri_portal_screen_cast::{
@@ -71,8 +78,6 @@ mod enabled {
     const CARD_MIN_PREVIEW_HEIGHT: f64 = 96.;
     const FONT: &str = "sans";
     const BACKDROP_COLOR: [f32; 4] = [0., 0., 0., 0.55];
-    pub const PREVIEW_FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
-
     trait PickerColorExt {
         fn set_source(self, cr: &cairo::Context);
     }

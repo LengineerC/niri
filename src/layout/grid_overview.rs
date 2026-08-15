@@ -114,6 +114,11 @@ pub struct GridOverview<W: LayoutElement> {
     /// While a window is interactively grabbed, the focus belongs to the grabbed window
     /// itself, so no grid cell shows the focus boost.
     pub grabbed_window: Option<W::Id>,
+    /// Windows currently flying into this grid from another workspace's grid cell.
+    ///
+    /// This grid renders above the other grids while the fly-in is ongoing, so that the flying
+    /// windows stay visible above the source grid they are crossing.
+    pub flying_in_windows: Vec<W::Id>,
     added_window_ids: Vec<W::Id>,
     /// col_idx → tile_idx for Column items that have multiple tiles.
     pub column_tile_focus: Vec<(usize, usize)>,
@@ -139,6 +144,7 @@ impl<W: LayoutElement> GridOverview<W> {
             previous_focus: None,
             focus_boost_anim: None,
             grabbed_window: None,
+            flying_in_windows: Vec::new(),
             added_window_ids: Vec::new(),
             column_tile_focus: Vec::new(),
             clock,
@@ -162,6 +168,7 @@ impl<W: LayoutElement> GridOverview<W> {
         self.open = !self.open;
         self.rearrange_anim = None;
         self.window_transition_starts.clear();
+        self.flying_in_windows.clear();
 
         let from = self.progress.take().map_or(0., |p| p.value());
         let to = if self.open { 1. } else { 0. };
@@ -175,6 +182,28 @@ impl<W: LayoutElement> GridOverview<W> {
             self.clock.clone(),
             from,
             to,
+            0.,
+            self.options.animations.grid_overview_open_close.0,
+        )));
+    }
+
+    /// Reopens the grid from its current closing visual state.
+    ///
+    /// Unlike [`GridOverview::toggle`], this starts the opening progress from zero while the
+    /// caller has already retargeted `entry_positions`/`entry_scales` to the current closing
+    /// visuals. Starting from zero keeps the focus boost and scale math from jumping.
+    pub(super) fn reopen(&mut self) {
+        self.open = true;
+        self.rearrange_anim = None;
+        self.window_transition_starts.clear();
+        self.flying_in_windows.clear();
+        self.previous_focus = None;
+        self.focus_boost_anim = None;
+        self.close_start_progress = 1.;
+        self.progress = Some(OverviewProgress::Animation(Animation::new(
+            self.clock.clone(),
+            0.,
+            1.,
             0.,
             self.options.animations.grid_overview_open_close.0,
         )));
@@ -199,7 +228,11 @@ impl<W: LayoutElement> GridOverview<W> {
         } else {
             None
         };
-        let should_rearrange = self.open && !old_layout.entries.is_empty();
+        // A grid that becomes empty (e.g. its only column was moved to another workspace)
+        // keeps an empty layout. When windows are added back into it with an explicit refresh,
+        // the fly-in transition must restart the rearrange animation even though the old layout
+        // had no entries. Passive recomputes must not start an animation on an empty layout.
+        let should_rearrange = self.open && (!old_layout.entries.is_empty() || restart_rearrange);
         let targets_changed = old_layout.entries.len() != new_layout.entries.len()
             || new_layout.entries.iter().any(|(item, info)| {
                 Self::matching_value(&old_layout.entries, item)
@@ -790,6 +823,7 @@ impl<W: LayoutElement> GridOverview<W> {
             if anim.is_done() {
                 self.rearrange_anim = None;
                 self.window_transition_starts.clear();
+                self.flying_in_windows.clear();
                 self.sync_entries_to_layout();
             }
         }
@@ -822,6 +856,7 @@ impl<W: LayoutElement> GridOverview<W> {
             .map(|(item, _)| (item.clone(), 1.))
             .collect();
         self.window_transition_starts.clear();
+        self.flying_in_windows.clear();
     }
 
     pub fn are_animations_ongoing(&self) -> bool {

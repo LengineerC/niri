@@ -15,8 +15,8 @@ use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
 use super::workspace::{
-    compute_working_area, OutputId, Workspace, WorkspaceAddWindowTarget, WorkspaceId,
-    WorkspaceRenderElement,
+    compute_working_area, GridRenderPass, OutputId, Workspace, WorkspaceAddWindowTarget,
+    WorkspaceId, WorkspaceRenderElement,
 };
 use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options};
 use crate::animation::{Animation, Clock};
@@ -841,14 +841,14 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub fn move_to_workspace_up(&mut self, activate: ActivateWindow) {
+    pub fn move_to_workspace_up(&mut self, activate: ActivateWindow) -> bool {
         let new_idx = self.active_workspace_idx.saturating_sub(1);
-        self.move_to_workspace(None, new_idx, activate);
+        self.move_to_workspace(None, new_idx, activate)
     }
 
-    pub fn move_to_workspace_down(&mut self, activate: ActivateWindow) {
+    pub fn move_to_workspace_down(&mut self, activate: ActivateWindow) -> bool {
         let new_idx = min(self.active_workspace_idx + 1, self.workspaces.len() - 1);
-        self.move_to_workspace(None, new_idx, activate);
+        self.move_to_workspace(None, new_idx, activate)
     }
 
     pub fn move_to_workspace(
@@ -856,7 +856,7 @@ impl<W: LayoutElement> Monitor<W> {
         window: Option<&W::Id>,
         idx: usize,
         activate: ActivateWindow,
-    ) {
+    ) -> bool {
         let source_workspace_idx = if let Some(window) = window {
             self.workspaces
                 .iter()
@@ -869,7 +869,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let new_idx = min(idx, self.workspaces.len() - 1);
         if new_idx == source_workspace_idx {
-            return;
+            return false;
         }
         let new_id = self.workspaces[new_idx].id();
 
@@ -879,7 +879,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let workspace = &mut self.workspaces[source_workspace_idx];
         let Some(window) = window.or_else(|| workspace.active_window().map(|win| win.id())) else {
-            return;
+            return false;
         };
         let window = window.clone();
 
@@ -887,6 +887,20 @@ impl<W: LayoutElement> Monitor<W> {
             .tiles_with_render_positions()
             .find_map(|(tile, offset, _visible)| (tile.window().id() == &window).then_some(offset))
             .unwrap();
+
+        // Moving out of the grid overview: the window visually sits in a scaled-down grid cell, so
+        // the fly-in animation should start from that cell's position and scale rather than its
+        // tiling position at full size.
+        let grid_start = if workspace.is_grid_overview_open() {
+            workspace
+                .grid_window_visual_transform(&window)
+                .map(|(pos, scale)| {
+                    old_render_pos = pos;
+                    scale
+                })
+        } else {
+            None
+        };
 
         let transaction = Transaction::new();
         let removed = workspace.remove_tile(&window, transaction);
@@ -932,30 +946,58 @@ impl<W: LayoutElement> Monitor<W> {
                 self.workspace_size_with_gap(1.).h * (source_workspace_idx as f64 - new_idx as f64);
         }
 
-        let (tile, new_render_pos) = self.workspaces[new_idx]
-            .tiles_with_render_positions_mut(false)
-            .find(|(tile, _)| tile.window().id() == &window)
-            .unwrap();
-        tile.animate_move_from_with_config(old_render_pos - new_render_pos, config);
-        tile.set_anim_y_between_workspaces();
+        if let Some(start_scale) = grid_start {
+            // The source workspace shows the grid overview, so the window's visual cell is a
+            // scaled-down grid entry. Animate it flying from that cell into its new grid cell.
+            //
+            // In grid mode every workspace on the monitor shows the grid, so the destination
+            // workspace animates the window inside its own grid via a window transition start
+            // (like the drag-into-grid animation) instead of the tile movement animation.
+            if self.workspaces[new_idx].is_grid_overview_open() {
+                self.workspaces[new_idx]
+                    .on_window_added_in_grid_preserving_move_animations(&window);
+                self.workspaces[new_idx].set_grid_window_transition_start(
+                    &window,
+                    old_render_pos,
+                    start_scale,
+                    config,
+                );
+            } else {
+                let (tile, new_render_pos) = self.workspaces[new_idx]
+                    .tiles_with_render_positions_mut(false)
+                    .find(|(tile, _)| tile.window().id() == &window)
+                    .unwrap();
+                tile.animate_move_from_with_config(old_render_pos - new_render_pos, config);
+                tile.set_anim_y_between_workspaces();
+            }
+        } else {
+            let (tile, new_render_pos) = self.workspaces[new_idx]
+                .tiles_with_render_positions_mut(false)
+                .find(|(tile, _)| tile.window().id() == &window)
+                .unwrap();
+            tile.animate_move_from_with_config(old_render_pos - new_render_pos, config);
+            tile.set_anim_y_between_workspaces();
+        }
+
+        true
     }
 
-    pub fn move_column_to_workspace_up(&mut self, activate: bool) {
+    pub fn move_column_to_workspace_up(&mut self, activate: bool) -> bool {
         let new_idx = self.active_workspace_idx.saturating_sub(1);
-        self.move_column_to_workspace(new_idx, activate);
+        self.move_column_to_workspace(new_idx, activate)
     }
 
-    pub fn move_column_to_workspace_down(&mut self, activate: bool) {
+    pub fn move_column_to_workspace_down(&mut self, activate: bool) -> bool {
         let new_idx = min(self.active_workspace_idx + 1, self.workspaces.len() - 1);
-        self.move_column_to_workspace(new_idx, activate);
+        self.move_column_to_workspace(new_idx, activate)
     }
 
-    pub fn move_column_to_workspace(&mut self, idx: usize, activate: bool) {
+    pub fn move_column_to_workspace(&mut self, idx: usize, activate: bool) -> bool {
         let source_workspace_idx = self.active_workspace_idx;
 
         let new_idx = min(idx, self.workspaces.len() - 1);
         if new_idx == source_workspace_idx {
-            return;
+            return false;
         }
 
         let workspace = &mut self.workspaces[source_workspace_idx];
@@ -965,12 +1007,11 @@ impl<W: LayoutElement> Monitor<W> {
             } else {
                 ActivateWindow::No
             };
-            self.move_to_workspace(None, idx, activate);
-            return;
+            return self.move_to_workspace(None, idx, activate);
         }
 
         let Some(id) = workspace.scrolling().active_column().map(Column::id) else {
-            return;
+            return false;
         };
         let mut old_render_pos = workspace
             .scrolling()
@@ -978,15 +1019,40 @@ impl<W: LayoutElement> Monitor<W> {
             .find_map(|(col, pos)| (col.id() == id).then_some(pos))
             .unwrap();
 
+        // Moving out of the grid overview: capture each window's grid cell position and scale so
+        // that the destination grid can animate the column's windows flying from their source
+        // cells into their new cells.
+        let grid_starts = if workspace.is_grid_overview_open() {
+            let starts: Vec<_> = workspace
+                .scrolling()
+                .columns()
+                .find(|col| col.id() == id)
+                .map(|col| {
+                    col.tiles()
+                        .filter_map(|(tile, _)| {
+                            let window_id = tile.window().id().clone();
+                            workspace
+                                .grid_window_visual_transform(&window_id)
+                                .map(|(pos, scale)| (window_id, pos, scale))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            (!starts.is_empty()).then_some(starts)
+        } else {
+            None
+        };
+
         // The active column may be a placeholder (all its windows minimized), which
         // remove_active_column() refuses to remove; there is nothing to move then.
         let Some(column) = workspace.remove_active_column() else {
-            return;
+            return false;
         };
 
         // Animate vertical movement between workspaces.
-        old_render_pos.y +=
+        let gap_offset =
             self.workspace_size_with_gap(1.).h * (source_workspace_idx as f64 - new_idx as f64);
+        old_render_pos.y += gap_offset;
 
         // If the view is following the column, match the animation.
         let config = if activate {
@@ -999,13 +1065,43 @@ impl<W: LayoutElement> Monitor<W> {
         self.add_column(new_idx, column, activate, Some(config));
 
         let new_idx = self.idx_of_ws(new_id).unwrap();
-        let (column, new_render_pos) = self.workspaces[new_idx]
-            .scrolling_mut()
-            .columns_with_render_positions_mut()
-            .find(|(col, _pos)| col.id() == id)
-            .unwrap();
-        column.animate_move_from_with_config(old_render_pos - new_render_pos, config);
-        column.set_anim_y_between_workspaces();
+
+        if let Some(starts) = grid_starts {
+            if self.workspaces[new_idx].is_grid_overview_open() {
+                // The destination grid animates the fly-in for each window of the column.
+                if let Some((first_id, _, _)) = starts.first() {
+                    self.workspaces[new_idx]
+                        .on_window_added_in_grid_preserving_move_animations(first_id);
+                }
+                for (window_id, mut pos, scale) in starts {
+                    pos.y += gap_offset;
+                    self.workspaces[new_idx].set_grid_window_transition_start(
+                        &window_id,
+                        pos,
+                        scale,
+                        config.clone(),
+                    );
+                }
+            } else {
+                let (column, new_render_pos) = self.workspaces[new_idx]
+                    .scrolling_mut()
+                    .columns_with_render_positions_mut()
+                    .find(|(col, _pos)| col.id() == id)
+                    .unwrap();
+                column.animate_move_from_with_config(old_render_pos - new_render_pos, config);
+                column.set_anim_y_between_workspaces();
+            }
+        } else {
+            let (column, new_render_pos) = self.workspaces[new_idx]
+                .scrolling_mut()
+                .columns_with_render_positions_mut()
+                .find(|(col, _pos)| col.id() == id)
+                .unwrap();
+            column.animate_move_from_with_config(old_render_pos - new_render_pos, config);
+            column.set_anim_y_between_workspaces();
+        }
+
+        true
     }
 
     pub fn switch_workspace_up(&mut self) {
@@ -1803,15 +1899,116 @@ impl<W: LayoutElement> Monitor<W> {
             )
         };
 
-        // Draw in passes for correct Z ordering during window movement between workspaces:
+        // The grid overview renders in a dedicated first pass so that everything else draws
+        // above it. When windows are flying between grid workspaces, grid items are queued
+        // top-to-bottom in three monitor-wide passes:
+        //
+        // 1. Focused grid items of the active workspace (including its flying window).
+        // 2. Non-focused flying windows (above the windows they cross).
+        // 3. All other grid items, at the bottom.
+        {
+            let grid_crop_bounds = Rectangle::new(
+                Point::from((-i32::MAX / 2, -i32::MAX / 2)),
+                Size::from((i32::MAX, i32::MAX)),
+            );
+
+            let geo_list: Vec<_> = self.workspaces_render_geo().collect();
+            let has_flying = self.workspaces.iter().any(|ws| ws.has_flying_in_windows());
+
+            macro_rules! render_grid_pass {
+                ($pass:expr, $only_flying:expr, $render_insert_hint:expr) => {{
+                    for (idx, ws) in self.workspaces.iter().enumerate() {
+                        if $only_flying {
+                            if !ws.has_flying_in_windows() {
+                                continue;
+                            }
+                        } else if !ws.is_grid_overview_open() && !ws.is_grid_overview_animation() {
+                            continue;
+                        }
+
+                        let geo = geo_list[idx];
+                        let xray_pos = XrayPos::new(geo.loc, zoom);
+                        let grid_focus_ring =
+                            focus_ring && (!has_flying || idx == self.active_workspace_idx);
+                        let is_active_workspace = idx == self.active_workspace_idx;
+
+                        let grid_scale_relocate = move |elem| {
+                            let elem = OverviewRescaleRenderElement::from_element(
+                                elem,
+                                Point::from((0, 0)),
+                                zoom,
+                            );
+                            RelocateRenderElement::from_element(
+                                elem,
+                                geo.loc.to_physical_precise_round(scale),
+                                Relocate::Relative,
+                            )
+                        };
+
+                        if $render_insert_hint {
+                            if let Some(loc) = insert_hint_render_loc {
+                                if loc.workspace == InsertWorkspace::Existing(ws.id()) {
+                                    let mut grid_hint_push = |elem| {
+                                        let elem = CropRenderElement::from_element(
+                                            elem,
+                                            scale,
+                                            grid_crop_bounds,
+                                        );
+                                        if let Some(elem) = elem {
+                                            let elem = MonitorInnerRenderElement::from(elem);
+                                            push(grid_scale_relocate(elem));
+                                        }
+                                    };
+                                    self.insert_hint_element.render(
+                                        ctx.renderer,
+                                        loc.location,
+                                        &mut grid_hint_push,
+                                    );
+                                }
+                            }
+                        }
+
+                        let mut grid_push = |elem| {
+                            let elem =
+                                CropRenderElement::from_element(elem, scale, grid_crop_bounds);
+                            if let Some(elem) = elem {
+                                let elem = MonitorInnerRenderElement::from(elem);
+                                push(grid_scale_relocate(elem));
+                            }
+                        };
+                        ws.render_grid_overview(
+                            ctx.r(),
+                            &mut grid_push,
+                            xray_pos,
+                            grid_focus_ring,
+                            is_active_workspace,
+                            $pass,
+                        );
+                    }
+                }};
+            }
+
+            if has_flying {
+                // Elements are queued top-to-bottom: focused items first, then flying windows,
+                // then non-focused items at the bottom.
+                render_grid_pass!(GridRenderPass::Focused, false, false);
+                render_grid_pass!(GridRenderPass::Flying, true, false);
+                render_grid_pass!(GridRenderPass::NonFocused, false, true);
+            } else {
+                render_grid_pass!(GridRenderPass::All, false, true);
+            }
+        }
+
+        // Draw the remaining layers in passes for correct Z ordering during window movement
+        // between workspaces:
         // - floating windows moving between workspaces
         // - normal floating windows
         // - scrolling windows moving between workspaces
         // - normal scrolling windows
-        for pass in 0..4 {
+        for pass in 1..5 {
             // Don't cull when drawing windows moving between workspaces so that windows moving to
             // workspaces off-screen will still render.
-            let cull = matches!(pass, 1 | 3);
+            let cull = matches!(pass, 2 | 4);
 
             // Crop the elements to prevent them overflowing, currently visible during a workspace
             // switch.
@@ -1842,7 +2039,19 @@ impl<W: LayoutElement> Monitor<W> {
                     )
                 };
 
-            for (ws, geo) in self.workspaces_with_render_geo_cull(cull) {
+            let output_geo = Rectangle::from_size(self.view_size);
+            for (idx, (ws, geo)) in self
+                .workspaces
+                .iter()
+                .zip(self.workspaces_render_geo())
+                .enumerate()
+            {
+                if cull && geo.intersection(output_geo).is_none() {
+                    continue;
+                }
+
+                let workspace_focus_ring = focus_ring && idx == self.active_workspace_idx;
+
                 // Macro instead of closure because ws and insert hint have different elem types.
                 macro_rules! push {
                     () => {{
@@ -1858,66 +2067,27 @@ impl<W: LayoutElement> Monitor<W> {
 
                 let xray_pos = XrayPos::new(geo.loc, zoom);
 
-                // Grid overview replaces the normal per-layer rendering for its workspace.
-                // Render it once, in the final (normal scrolling) pass, and skip the passes.
+                // The grid overview replaces the normal per-layer rendering for its workspace;
+                // it rendered in the first pass above.
                 if ws.is_grid_overview_open() || ws.is_grid_overview_animation() {
-                    if pass == 3 {
-                        let grid_scale_relocate = move |elem| {
-                            let elem = OverviewRescaleRenderElement::from_element(
-                                elem,
-                                Point::from((0, 0)),
-                                zoom,
-                            );
-                            RelocateRenderElement::from_element(
-                                elem,
-                                geo.loc.to_physical_precise_round(scale),
-                                Relocate::Relative,
-                            )
-                        };
-                        if let Some(loc) = insert_hint_render_loc {
-                            if loc.workspace == InsertWorkspace::Existing(ws.id()) {
-                                let mut grid_hint_push = |elem| {
-                                    let elem =
-                                        CropRenderElement::from_element(elem, scale, crop_bounds);
-                                    if let Some(elem) = elem {
-                                        let elem = MonitorInnerRenderElement::from(elem);
-                                        push(grid_scale_relocate(elem));
-                                    }
-                                };
-                                self.insert_hint_element.render(
-                                    ctx.renderer,
-                                    loc.location,
-                                    &mut grid_hint_push,
-                                );
-                            }
-                        }
-                        let mut grid_push = |elem| {
-                            let elem = CropRenderElement::from_element(elem, scale, crop_bounds);
-                            if let Some(elem) = elem {
-                                let elem = MonitorInnerRenderElement::from(elem);
-                                push(grid_scale_relocate(elem));
-                            }
-                        };
-                        ws.render_grid_overview(ctx.r(), &mut grid_push, xray_pos, focus_ring);
-                    }
                     continue;
                 }
 
                 match pass {
-                    0 => {
-                        ws.render_floating(
-                            ctx.r(),
-                            xray_pos,
-                            focus_ring,
-                            RenderLayer::MovingBetweenWorkspaces,
-                            push!(),
-                        );
-                    }
                     1 => {
                         ws.render_floating(
                             ctx.r(),
                             xray_pos,
-                            focus_ring,
+                            workspace_focus_ring,
+                            RenderLayer::MovingBetweenWorkspaces,
+                            push!(),
+                        );
+                    }
+                    2 => {
+                        ws.render_floating(
+                            ctx.r(),
+                            xray_pos,
+                            workspace_focus_ring,
                             RenderLayer::Normal,
                             push!(),
                         );
@@ -1932,11 +2102,11 @@ impl<W: LayoutElement> Monitor<W> {
                             }
                         }
                     }
-                    2 => {
+                    3 => {
                         ws.render_scrolling(
                             ctx.r(),
                             xray_pos,
-                            focus_ring,
+                            workspace_focus_ring,
                             RenderLayer::MovingBetweenWorkspaces,
                             push!(),
                         );
@@ -1945,7 +2115,7 @@ impl<W: LayoutElement> Monitor<W> {
                         ws.render_scrolling(
                             ctx.r(),
                             xray_pos,
-                            focus_ring,
+                            workspace_focus_ring,
                             RenderLayer::Normal,
                             push!(),
                         );

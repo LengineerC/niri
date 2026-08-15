@@ -5265,6 +5265,759 @@ fn grid_move_window_to_workspace_keeps_source_grid_open() {
     assert_eq!(source_ws.grid_focused_window_id(), Some(1));
 }
 
+#[test]
+fn grid_grab_minimized_window_restores_it() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MinimizeWindow(1),
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    assert!(layout.is_window_minimized(&1));
+
+    // Grab the minimized window at its grid cell.
+    let output = layout.outputs().next().unwrap().clone();
+    let ws = layout.active_workspace().unwrap();
+    let (pos, _scale) = ws.grid_window_visual_transform(&1).unwrap();
+    let geo = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces_render_geo()
+        .next()
+        .unwrap();
+    let grab_pos = geo.loc + pos + Point::from((10., 10.));
+
+    assert!(layout.interactive_move_begin(1, &output, grab_pos));
+    assert!(!layout.is_window_minimized(&1));
+}
+
+#[test]
+fn grid_move_column_to_workspace_flies_in_from_source_cells() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::ConsumeOrExpelWindowLeft { id: None },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    let source_ws_id = layout.active_workspace().unwrap().id();
+    let starts: Vec<_> = [1, 2]
+        .iter()
+        .map(|id| {
+            layout
+                .active_workspace()
+                .unwrap()
+                .grid_window_visual_transform(id)
+                .unwrap()
+        })
+        .collect();
+
+    layout.move_column_to_workspace(1, true);
+    layout.verify_invariants();
+
+    // Each window of the moved column gets a transition start at its source grid cell in the
+    // destination workspace's grid.
+    let target_ws = layout.active_workspace().unwrap();
+    assert_ne!(target_ws.id(), source_ws_id);
+    assert!(target_ws.is_grid_overview_open());
+
+    let go = target_ws.grid_overview().unwrap();
+    let geo: Vec<_> = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces_render_geo()
+        .collect();
+    let ws_height_with_gap = geo[1].loc.y - geo[0].loc.y;
+
+    for (id, (start_pos, start_scale)) in [1, 2].iter().zip(starts) {
+        let (_, trans_pos, trans_scale) = go
+            .window_transition_starts
+            .iter()
+            .find(|(wid, _, _)| wid == id)
+            .unwrap_or_else(|| panic!("window {id} should fly in from its source grid cell"));
+
+        approx::assert_abs_diff_eq!(*trans_scale, start_scale, epsilon = 0.001);
+        approx::assert_abs_diff_eq!(trans_pos.x, start_pos.x, epsilon = 0.001);
+        approx::assert_abs_diff_eq!(
+            trans_pos.y,
+            start_pos.y - ws_height_with_gap,
+            epsilon = 0.001
+        );
+    }
+
+    assert!(go.flying_in_windows.iter().any(|id| [1, 2].contains(id)));
+}
+
+#[test]
+fn grid_move_window_to_workspace_flies_in_from_source_cell() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+    ]);
+
+    let source_ws_id = layout.active_workspace().unwrap().id();
+    let (start_pos, start_scale) = layout
+        .active_workspace()
+        .unwrap()
+        .grid_window_visual_transform(&2)
+        .unwrap();
+
+    layout.move_to_workspace(None, 1, ActivateWindow::Yes);
+    layout.verify_invariants();
+
+    // The destination workspace's grid renders the fly-in: the moved window gets a transition
+    // start at its source grid cell, one workspace height with gap above the destination.
+    let target_ws = layout.active_workspace().unwrap();
+    assert_ne!(target_ws.id(), source_ws_id);
+    assert!(target_ws.is_grid_overview_open());
+
+    let go = target_ws.grid_overview().unwrap();
+    let (_, trans_pos, trans_scale) = go
+        .window_transition_starts
+        .iter()
+        .find(|(id, _, _)| *id == 2)
+        .expect("moved window should fly in from its source grid cell");
+
+    assert!(go.rearrange_anim.is_some());
+    assert_eq!(go.flying_in_windows, [2]);
+
+    let geo: Vec<_> = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces_render_geo()
+        .collect();
+    let ws_height_with_gap = geo[1].loc.y - geo[0].loc.y;
+
+    approx::assert_abs_diff_eq!(*trans_scale, start_scale, epsilon = 0.001);
+    approx::assert_abs_diff_eq!(trans_pos.x, start_pos.x, epsilon = 0.001);
+    approx::assert_abs_diff_eq!(
+        trans_pos.y,
+        start_pos.y - ws_height_with_gap,
+        epsilon = 0.001
+    );
+
+    // The grid renders the fly, so the tile itself has no between-workspaces movement.
+    let tile = target_ws
+        .scrolling()
+        .columns()
+        .flat_map(|col| col.tiles())
+        .find(|(tile, _)| tile.window().id() == &2)
+        .map(|(tile, _)| tile)
+        .unwrap();
+    assert!(!tile.is_moving_between_workspaces());
+}
+
+#[test]
+fn grid_closing_minimized_window_flies_back_while_fading() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::MinimizeWindow(1),
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    let ws = layout.active_workspace().unwrap();
+    let go = ws.grid_overview().unwrap();
+    let item = ws.scrolling().grid_item_for_window(&1).unwrap();
+    let (_, info) = go
+        .layout
+        .entries
+        .iter()
+        .find(|(entry, _)| entry == &item)
+        .unwrap();
+    let (open_pos, _) = ws.grid_item_render_visual_transform(go, &item, info);
+    let normal_pos = ws.scrolling().grid_preview(&item).unwrap().normal_pos;
+
+    layout.close_grid_overview();
+    layout.clock.set_unadjusted(Duration::from_millis(80));
+    layout.advance_animations();
+
+    let (_, ws) = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces
+        .iter()
+        .enumerate()
+        .find(|(_, ws)| ws.has_window(&1))
+        .unwrap();
+    let go = ws.grid_overview().unwrap();
+    let item = ws.scrolling().grid_item_for_window(&1).unwrap();
+    let (_, info) = go
+        .layout
+        .entries
+        .iter()
+        .find(|(entry, _)| entry == &item)
+        .unwrap();
+    let (close_pos, _) = ws.grid_item_render_visual_transform(go, &item, info);
+
+    let dist = |a: Point<f64, Logical>, b: Point<f64, Logical>| {
+        ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+    };
+
+    // The minimized window is on its way from the grid cell back to its normal position
+    // (rather than being pinned to the grid cell while only alpha changes).
+    assert!(dist(close_pos, normal_pos) < dist(open_pos, normal_pos));
+    assert!(dist(close_pos, info.target_pos) > 0.5);
+
+    // Its alpha is fading out at the same time.
+    let tile = ws
+        .scrolling()
+        .tiles()
+        .find(|tile| tile.window().id() == &1)
+        .unwrap();
+    let alpha = tile.alpha_animation.as_ref().unwrap();
+    assert_eq!(alpha.anim.to(), 0.);
+    assert!(alpha.anim.value() < 1.);
+}
+
+#[test]
+fn grid_reopen_mid_close_continues_from_current_visual() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    layout.close_grid_overview();
+    layout.clock.set_unadjusted(Duration::from_millis(50));
+    layout.advance_animations();
+
+    let visual = |layout: &Layout<TestWindow>| {
+        let ws = layout.active_workspace().unwrap();
+        let go = ws.grid_overview().unwrap();
+        let item = ws.scrolling().grid_item_for_window(&1).unwrap();
+        let (_, info) = go
+            .layout
+            .entries
+            .iter()
+            .find(|(entry, _)| entry == &item)
+            .unwrap();
+        ws.grid_item_render_visual_transform(go, &item, info)
+    };
+
+    let (before_pos, before_scale) = visual(&layout);
+
+    layout.toggle_grid_overview();
+
+    let (after_pos, after_scale) = visual(&layout);
+    approx::assert_abs_diff_eq!(after_pos.x, before_pos.x, epsilon = 1.5);
+    approx::assert_abs_diff_eq!(after_pos.y, before_pos.y, epsilon = 1.5);
+    approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.01);
+}
+
+#[test]
+fn grid_click_minimized_window_does_not_jump_to_focused_scale() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::MinimizeWindow(1),
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    let ws = layout.active_workspace().unwrap();
+    let go = ws.grid_overview().unwrap();
+    let item = ws.scrolling().grid_item_for_window(&1).unwrap();
+    let (_, info) = go
+        .layout
+        .entries
+        .iter()
+        .find(|(entry, _)| entry == &item)
+        .unwrap();
+    let (_, pre_scale) = ws.grid_item_render_visual_transform(go, &item, info);
+
+    assert!(layout.confirm_grid_selection_for_window(&1));
+
+    let (_, ws) = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces
+        .iter()
+        .enumerate()
+        .find(|(_, ws)| ws.has_window(&1))
+        .unwrap();
+    let go = ws.grid_overview().unwrap();
+    let item = ws.scrolling().grid_item_for_window(&1).unwrap();
+    let (_, info) = go
+        .layout
+        .entries
+        .iter()
+        .find(|(entry, _)| entry == &item)
+        .unwrap();
+    let (_, close_start_scale) = ws.grid_item_render_visual_transform(go, &item, info);
+
+    assert!(!layout.is_window_minimized(&1));
+    approx::assert_abs_diff_eq!(close_start_scale, pre_scale, epsilon = 0.001);
+}
+
+#[test]
+fn grid_cross_workspace_move_uses_workspace_switch_animation_for_fly_in() {
+    use niri_config::animations::{Curve, EasingParams, Kind};
+
+    let mut options = Options::default();
+    options.animations.workspace_switch.0.kind = Kind::Easing(EasingParams {
+        duration_ms: 1000,
+        curve: Curve::Linear,
+    });
+    options.animations.window_movement.0.kind = Kind::Easing(EasingParams {
+        duration_ms: 1,
+        curve: Curve::Linear,
+    });
+
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::AddWindow {
+                params: TestWindowParams::new(2),
+            },
+            Op::FocusWindow(2),
+            Op::ToggleGridOverview,
+            Op::CompleteAnimations,
+        ],
+    );
+
+    layout.move_to_workspace(None, 1, ActivateWindow::Yes);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
+
+    let (_, ws) = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces
+        .iter()
+        .enumerate()
+        .find(|(_, ws)| ws.has_window(&2))
+        .unwrap();
+    let go = ws.grid_overview().unwrap();
+    let value = go.rearrange_anim.as_ref().unwrap().value();
+    assert!(value > 0.05);
+    assert!(value < 0.5, "value {value}");
+}
+
+#[test]
+fn grid_move_column_reversed_midflight_keeps_visual_continuity() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::ConsumeOrExpelWindowLeft { id: None },
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    layout.move_column_to_workspace_down(true);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
+
+    let visual = |layout: &Layout<TestWindow>, id: usize| {
+        let mon = layout.active_monitor_ref().unwrap();
+        let geo: Vec<_> = mon.workspaces_render_geo().collect();
+        let (ws_idx, ws) = mon
+            .workspaces
+            .iter()
+            .enumerate()
+            .find(|(_, ws)| ws.has_window(&id))
+            .unwrap();
+        let (pos, scale) = ws.grid_window_visual_transform(&id).unwrap();
+        (geo[ws_idx].loc + pos, scale)
+    };
+
+    let before: Vec<_> = [1, 2].iter().map(|id| visual(&layout, *id)).collect();
+
+    layout.move_column_to_workspace_up(true);
+
+    for (id, (before_pos, before_scale)) in [1, 2].iter().zip(&before) {
+        let (after_pos, after_scale) = visual(&layout, *id);
+        approx::assert_abs_diff_eq!(after_pos.x, before_pos.x, epsilon = 0.5);
+        approx::assert_abs_diff_eq!(after_pos.y, before_pos.y, epsilon = 0.5);
+        approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.001);
+    }
+
+    let (_, ws) = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces
+        .iter()
+        .enumerate()
+        .find(|(_, ws)| ws.has_window(&1))
+        .unwrap();
+    let go = ws.grid_overview().unwrap();
+    assert!(go.rearrange_anim.is_some());
+    assert!(go.flying_in_windows.contains(&1));
+    assert!(go.flying_in_windows.contains(&2));
+}
+
+#[test]
+fn grid_move_window_reversed_midflight_keeps_visual_continuity() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+    ]);
+    layout.move_to_workspace(Some(&3), 1, ActivateWindow::No);
+    layout.activate_window(&2);
+    layout.toggle_grid_overview();
+    layout.clock.set_complete_instantly(true);
+    layout.advance_animations();
+    layout.clock.set_complete_instantly(false);
+
+    layout.move_to_workspace_down(true);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
+
+    let visual = |layout: &Layout<TestWindow>| {
+        let mon = layout.active_monitor_ref().unwrap();
+        let geo: Vec<_> = mon.workspaces_render_geo().collect();
+        let (ws_idx, ws) = mon
+            .workspaces
+            .iter()
+            .enumerate()
+            .find(|(_, ws)| ws.has_window(&2))
+            .unwrap();
+        let (pos, scale) = ws.grid_window_visual_transform(&2).unwrap();
+        (geo[ws_idx].loc + pos, scale)
+    };
+
+    let (before_pos, before_scale) = visual(&layout);
+
+    layout.move_to_workspace_up(true);
+
+    let (after_pos, after_scale) = visual(&layout);
+    approx::assert_abs_diff_eq!(after_pos.x, before_pos.x, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_pos.y, before_pos.y, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.001);
+
+    let (_, ws) = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces
+        .iter()
+        .enumerate()
+        .find(|(_, ws)| ws.has_window(&2))
+        .unwrap();
+    let go = ws.grid_overview().unwrap();
+    assert!(go.rearrange_anim.is_some());
+    assert!(go.flying_in_windows.contains(&2));
+}
+
+#[test]
+fn grid_move_column_triple_reversal_keeps_visual_continuity() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::ConsumeOrExpelWindowLeft { id: None },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    // Focus a different column before moving, like pressing grid focus keys first.
+    layout
+        .active_workspace_mut()
+        .unwrap()
+        .set_grid_focus_for_window(&3);
+
+    let visual = |layout: &Layout<TestWindow>, id: usize| {
+        let mon = layout.active_monitor_ref().unwrap();
+        let geo: Vec<_> = mon.workspaces_render_geo().collect();
+        let (ws_idx, ws) = mon
+            .workspaces
+            .iter()
+            .enumerate()
+            .find(|(_, ws)| ws.has_window(&id))
+            .unwrap();
+        let (pos, scale) = ws.grid_window_visual_transform(&id).unwrap();
+        (geo[ws_idx].loc + pos, scale)
+    };
+
+    layout.move_column_to_workspace_down(true);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
+
+    layout.move_column_to_workspace_up(true);
+    layout.clock.set_unadjusted(Duration::from_millis(120));
+    layout.advance_animations();
+    let before = visual(&layout, 3);
+
+    layout.move_column_to_workspace_down(true);
+    let (after_pos, after_scale) = visual(&layout, 3);
+
+    approx::assert_abs_diff_eq!(after_pos.x, before.0.x, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_pos.y, before.0.y, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_scale, before.1, epsilon = 0.001);
+}
+
+#[test]
+fn grid_move_column_at_edge_repeat_does_not_jump_midflight() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::ConsumeOrExpelWindowLeft { id: None },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+    layout.move_column_to_workspace_down(true);
+    layout.clock.set_complete_instantly(true);
+    layout.advance_animations();
+    layout.clock.set_complete_instantly(false);
+    layout.move_column_to_workspace_down(true);
+    layout.clock.set_complete_instantly(true);
+    layout.advance_animations();
+    layout.clock.set_complete_instantly(false);
+
+    layout.move_column_to_workspace_up(true);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
+
+    let visual = |layout: &Layout<TestWindow>, id: usize| {
+        let mon = layout.active_monitor_ref().unwrap();
+        let geo: Vec<_> = mon.workspaces_render_geo().collect();
+        let (ws_idx, ws) = mon
+            .workspaces
+            .iter()
+            .enumerate()
+            .find(|(_, ws)| ws.has_window(&id))
+            .unwrap();
+        let (pos, scale) = ws.grid_window_visual_transform(&id).unwrap();
+        (geo[ws_idx].loc + pos, scale)
+    };
+
+    let before: Vec<_> = [1, 2].iter().map(|id| visual(&layout, *id)).collect();
+
+    // Already at the top workspace: this move is a no-op and must not restart the animation.
+    layout.move_column_to_workspace_up(true);
+
+    for (id, (before_pos, before_scale)) in [1, 2].iter().zip(&before) {
+        let (after_pos, after_scale) = visual(&layout, *id);
+        approx::assert_abs_diff_eq!(after_pos.x, before_pos.x, epsilon = 0.5);
+        approx::assert_abs_diff_eq!(after_pos.y, before_pos.y, epsilon = 0.5);
+        approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.001);
+    }
+}
+
+#[test]
+fn grid_move_window_at_edge_repeat_does_not_jump_midflight() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ]);
+    layout.toggle_grid_overview();
+    layout.clock.set_complete_instantly(true);
+    layout.advance_animations();
+    layout.clock.set_complete_instantly(false);
+
+    layout.move_to_workspace_down(true);
+    layout.clock.set_complete_instantly(true);
+    layout.advance_animations();
+    layout.clock.set_complete_instantly(false);
+
+    layout.move_to_workspace_up(true);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
+
+    let visual = |layout: &Layout<TestWindow>| {
+        let mon = layout.active_monitor_ref().unwrap();
+        let geo: Vec<_> = mon.workspaces_render_geo().collect();
+        let (ws_idx, ws) = mon
+            .workspaces
+            .iter()
+            .enumerate()
+            .find(|(_, ws)| ws.has_window(&1))
+            .unwrap();
+        let (pos, scale) = ws.grid_window_visual_transform(&1).unwrap();
+        (geo[ws_idx].loc + pos, scale)
+    };
+
+    let (before_pos, before_scale) = visual(&layout);
+
+    // Already at the top workspace: this move is a no-op and must not restart the animation.
+    layout.move_to_workspace_up(true);
+
+    let (after_pos, after_scale) = visual(&layout);
+    approx::assert_abs_diff_eq!(after_pos.x, before_pos.x, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_pos.y, before_pos.y, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.001);
+}
+
+#[test]
+fn grid_move_window_reversed_midflight_keeps_visual_continuity_from_empty_source() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ]);
+    layout.toggle_grid_overview();
+    layout.clock.set_complete_instantly(true);
+    layout.advance_animations();
+    layout.clock.set_complete_instantly(false);
+
+    layout.move_to_workspace_down(true);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
+
+    let visual = |layout: &Layout<TestWindow>| {
+        let mon = layout.active_monitor_ref().unwrap();
+        let geo: Vec<_> = mon.workspaces_render_geo().collect();
+        let (ws_idx, ws) = mon
+            .workspaces
+            .iter()
+            .enumerate()
+            .find(|(_, ws)| ws.has_window(&1))
+            .unwrap();
+        let (pos, scale) = ws.grid_window_visual_transform(&1).unwrap();
+        (geo[ws_idx].loc + pos, scale)
+    };
+
+    let (before_pos, before_scale) = visual(&layout);
+
+    layout.move_to_workspace_up(true);
+
+    let (after_pos, after_scale) = visual(&layout);
+    approx::assert_abs_diff_eq!(after_pos.x, before_pos.x, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_pos.y, before_pos.y, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.001);
+}
+
+#[test]
+fn grid_move_window_down_twice_midflight_keeps_visual_continuity() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+    ]);
+    layout.move_to_workspace(Some(&3), 1, ActivateWindow::No);
+    layout.activate_window(&2);
+    layout.toggle_grid_overview();
+    layout.clock.set_complete_instantly(true);
+    layout.advance_animations();
+    layout.clock.set_complete_instantly(false);
+
+    layout.move_to_workspace_down(true);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
+
+    let visual = |layout: &Layout<TestWindow>| {
+        let mon = layout.active_monitor_ref().unwrap();
+        let geo: Vec<_> = mon.workspaces_render_geo().collect();
+        let (ws_idx, ws) = mon
+            .workspaces
+            .iter()
+            .enumerate()
+            .find(|(_, ws)| ws.has_window(&2))
+            .unwrap();
+        let (pos, scale) = ws.grid_window_visual_transform(&2).unwrap();
+        (geo[ws_idx].loc + pos, scale)
+    };
+
+    let (before_pos, before_scale) = visual(&layout);
+
+    layout.move_to_workspace_down(true);
+
+    let (after_pos, after_scale) = visual(&layout);
+    approx::assert_abs_diff_eq!(after_pos.x, before_pos.x, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_pos.y, before_pos.y, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after_scale, before_scale, epsilon = 0.001);
+
+    let (_, ws) = layout
+        .active_monitor_ref()
+        .unwrap()
+        .workspaces
+        .iter()
+        .enumerate()
+        .find(|(_, ws)| ws.has_window(&2))
+        .unwrap();
+    let go = ws.grid_overview().unwrap();
+    assert!(go.rearrange_anim.is_some());
+    assert!(go.flying_in_windows.contains(&2));
+}
+
 fn grid_layout_with_occupied_workspace_below() -> Layout<TestWindow> {
     let mut layout = check_ops([
         Op::AddOutput(1),

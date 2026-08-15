@@ -177,9 +177,9 @@ use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderE
 use crate::ui::hotkey_overlay::HotkeyOverlay;
 use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
 use crate::ui::screen_transition::{self, ScreenTransition};
-use crate::ui::screencast_picker::ScreenCastPickerRenderElement;
 #[cfg(feature = "xdp-gnome-screencast")]
-use crate::ui::screencast_picker::{PickerCandidate, ScreenCastPickerUi, PREVIEW_FRAME_INTERVAL};
+use crate::ui::screencast_picker::{PickerCandidate, ScreenCastPickerUi};
+use crate::ui::screencast_picker::{ScreenCastPickerRenderElement, PREVIEW_FRAME_INTERVAL};
 use crate::ui::screenshot_ui::{
     OutputScreenshot, ScreenshotPathReplySender, ScreenshotPortalError, ScreenshotReplySender,
     ScreenshotSelectionReplySender, ScreenshotUi, ScreenshotUiRenderElement,

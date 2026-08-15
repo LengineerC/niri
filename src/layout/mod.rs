@@ -2410,19 +2410,15 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_to_workspace_up(&mut self, focus: bool) {
-        if self
-            .run_active_grid_overview_action(|this| {
-                if let Some(monitor) = this.active_monitor() {
-                    let activate = if focus {
-                        ActivateWindow::Smart
-                    } else {
-                        ActivateWindow::No
-                    };
-                    monitor.move_to_workspace_up(activate);
-                }
-            })
-            .is_some()
-        {
+        let activate = if focus {
+            ActivateWindow::Smart
+        } else {
+            ActivateWindow::No
+        };
+        if self.run_active_grid_overview_action_if_moved(|this| {
+            this.active_monitor()
+                .is_some_and(|monitor| monitor.move_to_workspace_up(activate))
+        }) {
             return;
         }
         if self.grid_move_guard() {
@@ -2440,19 +2436,15 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_to_workspace_down(&mut self, focus: bool) {
-        if self
-            .run_active_grid_overview_action(|this| {
-                if let Some(monitor) = this.active_monitor() {
-                    let activate = if focus {
-                        ActivateWindow::Smart
-                    } else {
-                        ActivateWindow::No
-                    };
-                    monitor.move_to_workspace_down(activate);
-                }
-            })
-            .is_some()
-        {
+        let activate = if focus {
+            ActivateWindow::Smart
+        } else {
+            ActivateWindow::No
+        };
+        if self.run_active_grid_overview_action_if_moved(|this| {
+            this.active_monitor()
+                .is_some_and(|monitor| monitor.move_to_workspace_down(activate))
+        }) {
             return;
         }
         if self.grid_move_guard() {
@@ -2476,13 +2468,10 @@ impl<W: LayoutElement> Layout<W> {
         activate: ActivateWindow,
     ) {
         if window.is_none()
-            && self
-                .run_active_grid_overview_action(|this| {
-                    if let Some(monitor) = this.active_monitor() {
-                        monitor.move_to_workspace(None, idx, activate);
-                    }
-                })
-                .is_some()
+            && self.run_active_grid_overview_action_if_moved(|this| {
+                this.active_monitor()
+                    .is_some_and(|monitor| monitor.move_to_workspace(None, idx, activate))
+            })
         {
             return;
         }
@@ -2515,14 +2504,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_column_to_workspace_up(&mut self, activate: bool) {
-        if self
-            .run_active_grid_overview_action(|this| {
-                if let Some(monitor) = this.active_monitor() {
-                    monitor.move_column_to_workspace_up(activate);
-                }
-            })
-            .is_some()
-        {
+        if self.run_active_grid_overview_action_if_moved(|this| {
+            this.active_monitor()
+                .is_some_and(|monitor| monitor.move_column_to_workspace_up(activate))
+        }) {
             return;
         }
         if self.grid_move_guard() {
@@ -2535,14 +2520,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_column_to_workspace_down(&mut self, activate: bool) {
-        if self
-            .run_active_grid_overview_action(|this| {
-                if let Some(monitor) = this.active_monitor() {
-                    monitor.move_column_to_workspace_down(activate);
-                }
-            })
-            .is_some()
-        {
+        if self.run_active_grid_overview_action_if_moved(|this| {
+            this.active_monitor()
+                .is_some_and(|monitor| monitor.move_column_to_workspace_down(activate))
+        }) {
             return;
         }
         if self.grid_move_guard() {
@@ -2555,14 +2536,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn move_column_to_workspace(&mut self, idx: usize, activate: bool) {
-        if self
-            .run_active_grid_overview_action(|this| {
-                if let Some(monitor) = this.active_monitor() {
-                    monitor.move_column_to_workspace(idx, activate);
-                }
-            })
-            .is_some()
-        {
+        if self.run_active_grid_overview_action_if_moved(|this| {
+            this.active_monitor()
+                .is_some_and(|monitor| monitor.move_column_to_workspace(idx, activate))
+        }) {
             return;
         }
         if self.grid_move_guard() {
@@ -4532,9 +4509,10 @@ impl<W: LayoutElement> Layout<W> {
         output: &Output,
         start_pos_within_output: Point<f64, Logical>,
     ) -> bool {
-        // Minimized windows have no on-screen presence to interact with.
+        // Grabbing a minimized window (possible in the grid overview) restores and activates
+        // it first.
         if self.is_window_minimized(&window_id) {
-            return false;
+            self.set_window_minimized(&window_id, false);
         }
         if self.interactive_move.is_some() {
             return false;
@@ -6024,6 +6002,7 @@ impl<W: LayoutElement> Layout<W> {
             preferred_focus.as_ref(),
             stop_move_animations,
             window_visual_snapshots,
+            false,
         );
     }
 
@@ -6032,6 +6011,30 @@ impl<W: LayoutElement> Layout<W> {
         action: impl FnOnce(&mut Self) -> R,
     ) -> Option<R> {
         self.run_active_grid_overview_action_inner(action, true)
+    }
+
+    /// Like [`Self::run_active_grid_overview_action`], but skips the grid refresh when the
+    /// action was a no-op (e.g. pressing move-to-workspace at the edge of the workspace list).
+    /// Refreshing a no-op move would otherwise restart the rearrange animation and make the
+    /// moved window/column jump.
+    fn run_active_grid_overview_action_if_moved(
+        &mut self,
+        action: impl FnOnce(&mut Self) -> bool,
+    ) -> bool {
+        let Some((ws_id, focus_id, window_visual_snapshots)) = self.active_grid_overview_action()
+        else {
+            return false;
+        };
+        let moved = action(self);
+        if moved {
+            self.refresh_grid_workspace_after_action(
+                ws_id,
+                Some(focus_id),
+                true,
+                window_visual_snapshots,
+            );
+        }
+        moved
     }
 
     fn run_active_grid_overview_action_preserving_move_animations<R>(
