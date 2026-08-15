@@ -966,7 +966,7 @@ impl<W: LayoutElement> Layout<W> {
             panic!()
         };
 
-        monitors[monitor_idx].add_column(workspace_idx, column, activate, None);
+        monitors[monitor_idx].add_column(workspace_idx, column, activate, None, false);
 
         if activate {
             *active_monitor_idx = monitor_idx;

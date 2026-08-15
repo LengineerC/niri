@@ -556,6 +556,7 @@ impl<W: LayoutElement> Monitor<W> {
         column: Column<W>,
         activate: bool,
         anim: Option<niri_config::Animation>,
+        preserve_move_animations: bool,
     ) {
         let workspace = &mut self.workspaces[workspace_idx];
 
@@ -581,7 +582,12 @@ impl<W: LayoutElement> Monitor<W> {
                 .active_window()
                 .map(|window| window.id().clone())
             {
-                self.workspaces[workspace_idx].on_window_added_in_grid(&id);
+                if preserve_move_animations {
+                    self.workspaces[workspace_idx]
+                        .on_window_added_in_grid_preserving_move_animations(&id);
+                } else {
+                    self.workspaces[workspace_idx].on_window_added_in_grid(&id);
+                }
             }
         }
 
@@ -1062,7 +1068,7 @@ impl<W: LayoutElement> Monitor<W> {
         };
 
         let new_id = self.workspaces[new_idx].id();
-        self.add_column(new_idx, column, activate, Some(config));
+        self.add_column(new_idx, column, activate, Some(config), true);
 
         let new_idx = self.idx_of_ws(new_id).unwrap();
 

@@ -214,7 +214,7 @@ impl<W: LayoutElement> GridOverview<W> {
         items: &[(GridItem<W>, Size<f64, Logical>)],
         area: Rectangle<f64, Logical>,
         restart_rearrange: bool,
-    ) {
+    ) -> bool {
         let old_layout = self.layout.clone();
         let new_layout = GridLayout::compute(items, area, &self.options.grid_overview);
         let progress_value = self.progress_value();
@@ -334,6 +334,8 @@ impl<W: LayoutElement> GridOverview<W> {
             self.focus.0 = self.focus.0.min(self.layout.rows.saturating_sub(1));
             self.focus.1 = self.focus.1.min(self.layout.cols.saturating_sub(1));
         }
+
+        restart_rearrange
     }
 
     fn matching_value<'a, T>(entries: &'a [(GridItem<W>, T)], item: &GridItem<W>) -> Option<&'a T> {
@@ -475,7 +477,7 @@ impl<W: LayoutElement> GridOverview<W> {
             let from = Self::matching_value(&self.focus_boosts, item)
                 .copied()
                 .unwrap_or(1.);
-            from + (target_focus_boost - from) * anim.value().clamp(0., 1.)
+            from + (target_focus_boost - from) * anim.clamped_value()
         } else {
             target_focus_boost
         };
@@ -557,6 +559,10 @@ impl<W: LayoutElement> GridOverview<W> {
     }
 
     pub fn set_focus_without_animation(&mut self, focus: (usize, usize)) {
+        if self.focus == focus {
+            return;
+        }
+
         self.focus = focus;
         self.previous_focus = None;
         self.focus_boost_anim = None;
@@ -814,7 +820,7 @@ impl<W: LayoutElement> GridOverview<W> {
                 } else {
                     None
                 };
-                if self.open && self.rearrange_anim.is_none() {
+                if self.open && self.rearrange_anim.is_none() && self.focus_boost_anim.is_none() {
                     self.sync_entries_to_layout();
                 }
             }

@@ -733,21 +733,51 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    fn set_grid_window_transition_starts(&mut self, snapshots: Vec<GridWindowVisual<W>>) {
-        let starts: Vec<_> = snapshots
-            .into_iter()
+    fn set_grid_window_transition_starts(
+        &mut self,
+        snapshots: Vec<GridWindowVisual<W>>,
+        rearrange_restarted: bool,
+    ) {
+        let mut starts: Vec<_> = snapshots
+            .iter()
             .filter_map(|snapshot| {
                 let new_item = self.grid_item_for_window(&snapshot.window_id)?;
                 let new_column_tile_count = self.grid_item_column_tile_count(&new_item);
                 let topology_changed = !new_item.matches_animation_key(&snapshot.item);
                 let target_changed = new_column_tile_count != snapshot.column_tile_count;
                 (topology_changed || target_changed).then_some((
-                    snapshot.window_id,
+                    snapshot.window_id.clone(),
                     snapshot.pos,
                     snapshot.scale,
                 ))
             })
             .collect();
+
+        // Preserve still-running per-window transitions for windows that were not affected by
+        // this action. Otherwise any unrelated grid action would snap all in-flight windows to
+        // their targets.
+        if let Some(go) = &self.grid_overview {
+            for (window_id, pos, scale) in &go.window_transition_starts {
+                if starts.iter().any(|(id, _, _)| id == window_id)
+                    || self.grid_item_for_window(window_id).is_none()
+                {
+                    continue;
+                }
+
+                if rearrange_restarted {
+                    // The rearrange animation was restarted from zero. Keep this window at its
+                    // pre-action visual position instead of jumping back to the original start.
+                    if let Some(snapshot) = snapshots
+                        .iter()
+                        .find(|snapshot| &snapshot.window_id == window_id)
+                    {
+                        starts.push((window_id.clone(), snapshot.pos, snapshot.scale));
+                    }
+                } else {
+                    starts.push((window_id.clone(), *pos, *scale));
+                }
+            }
+        }
 
         if let Some(go) = &mut self.grid_overview {
             go.set_window_transition_starts(starts);
@@ -830,7 +860,7 @@ impl<W: LayoutElement> Workspace<W> {
         if stop_move_animations {
             self.scrolling.stop_move_animations();
         }
-        self.recompute_grid_overview_layout(true);
+        let rearrange_restarted = self.recompute_grid_overview_layout(true);
 
         let focus_set = preferred_focus.is_some_and(|id| {
             if animate_focus {
@@ -843,7 +873,7 @@ impl<W: LayoutElement> Workspace<W> {
             self.sync_grid_focus_to_active_window();
         }
 
-        self.set_grid_window_transition_starts(window_visual_snapshots);
+        self.set_grid_window_transition_starts(window_visual_snapshots, rearrange_restarted);
     }
 
     pub fn refresh_grid_entry_positions(&mut self) {
@@ -902,17 +932,17 @@ impl<W: LayoutElement> Workspace<W> {
         if stop_move_animations && self.is_grid_overview_open() {
             self.scrolling.stop_move_animations();
         }
-        self.recompute_grid_overview_layout(true);
+        let rearrange_restarted = self.recompute_grid_overview_layout(true);
 
         if let Some(id) = previous_focus {
             if self.set_grid_focus_for_window(&id) {
-                self.set_grid_window_transition_starts(window_visual_snapshots);
+                self.set_grid_window_transition_starts(window_visual_snapshots, rearrange_restarted);
                 return;
             }
         }
 
         self.sync_grid_focus_to_active_window();
-        self.set_grid_window_transition_starts(window_visual_snapshots);
+        self.set_grid_window_transition_starts(window_visual_snapshots, rearrange_restarted);
     }
 
     pub fn on_window_added_in_grid(&mut self, id: &W::Id) {
@@ -943,20 +973,20 @@ impl<W: LayoutElement> Workspace<W> {
             .is_some_and(|go| go.open && go.window_was_added_while_open(id))
     }
 
-    fn recompute_grid_overview_layout(&mut self, restart_rearrange: bool) {
+    fn recompute_grid_overview_layout(&mut self, restart_rearrange: bool) -> bool {
         let items = self.grid_overview_items();
         let working_area = self.working_area;
 
         let mut go = match self.grid_overview.take() {
             Some(go) => go,
-            None => return,
+            None => return false,
         };
 
         if !go.open {
             self.grid_overview = Some(go);
-            return;
+            return false;
         }
-        go.compute_layout(&items, working_area, restart_rearrange);
+        let rearrange_restarted = go.compute_layout(&items, working_area, restart_rearrange);
 
         // If a flying-in window is no longer in this grid (it was moved away again before
         // the fly-in finished), drop it so this grid stops rendering above the others once none
@@ -992,6 +1022,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
 
         self.grid_overview = Some(go);
+        rearrange_restarted
     }
     pub fn fix_floating_state_for_active(&mut self) {
         if let Some(id) = self.grid_focused_window_id() {

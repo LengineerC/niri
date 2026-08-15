@@ -5816,6 +5816,113 @@ fn grid_move_column_triple_reversal_keeps_visual_continuity() {
 }
 
 #[test]
+fn grid_noop_action_preserves_ongoing_focus_boost() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWindow(1),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    // Start a focus-boost animation to window 2.
+    layout
+        .active_workspace_mut()
+        .unwrap()
+        .set_grid_focus_for_window(&2);
+    assert!(layout
+        .active_workspace()
+        .unwrap()
+        .grid_overview()
+        .unwrap()
+        .focus_boost_anim
+        .is_some());
+
+    // A no-op action refreshes the grid; it must not cancel the in-progress focus boost.
+    layout.move_right();
+
+    let go = layout.active_workspace().unwrap().grid_overview().unwrap();
+    assert!(
+        go.focus_boost_anim.is_some(),
+        "focus {:?} previous {:?} boosts {:?}",
+        go.focus,
+        go.previous_focus,
+        go.focus_boosts
+    );
+    assert!(!go.focus_boosts.is_empty());
+}
+
+#[test]
+fn grid_noop_action_preserves_ongoing_window_transitions() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWindow(2),
+        Op::ToggleGridOverview,
+        Op::CompleteAnimations,
+    ]);
+
+    layout.move_to_workspace_down(true);
+    layout.clock.set_unadjusted(Duration::from_millis(80));
+    layout.advance_animations();
+
+    let mon = layout.active_monitor_ref().unwrap();
+    let (ws_idx, _) = mon
+        .workspaces
+        .iter()
+        .enumerate()
+        .find(|(_, ws)| ws.has_window(&2))
+        .unwrap();
+    let transitions = mon.workspaces[ws_idx]
+        .grid_overview()
+        .unwrap()
+        .window_transition_starts
+        .clone();
+    let geo: Vec<_> = mon.workspaces_render_geo().collect();
+    let (pos, scale) = mon.workspaces[ws_idx]
+        .grid_window_visual_transform(&2)
+        .unwrap();
+    let before = (geo[ws_idx].loc + pos, scale);
+    assert!(!transitions.is_empty());
+
+    // A no-op grid action while the fly-in is still running must not clear its transition.
+    layout.move_left();
+
+    let mon = layout.active_monitor_ref().unwrap();
+    let (ws_idx, _) = mon
+        .workspaces
+        .iter()
+        .enumerate()
+        .find(|(_, ws)| ws.has_window(&2))
+        .unwrap();
+    let after_transitions = mon.workspaces[ws_idx]
+        .grid_overview()
+        .unwrap()
+        .window_transition_starts
+        .clone();
+    let geo: Vec<_> = mon.workspaces_render_geo().collect();
+    let (pos, scale) = mon.workspaces[ws_idx]
+        .grid_window_visual_transform(&2)
+        .unwrap();
+    let after = (geo[ws_idx].loc + pos, scale);
+
+    assert_eq!(after_transitions, transitions);
+    approx::assert_abs_diff_eq!(after.0.x, before.0.x, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after.0.y, before.0.y, epsilon = 0.5);
+    approx::assert_abs_diff_eq!(after.1, before.1, epsilon = 0.001);
+}
+
+#[test]
 fn grid_move_column_at_edge_repeat_does_not_jump_midflight() {
     let mut layout = check_ops([
         Op::AddOutput(1),
