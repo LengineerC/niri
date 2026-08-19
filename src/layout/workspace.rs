@@ -7,9 +7,7 @@ use niri_config::{
     CenterFocusedColumn, CornerRadius, OutputName, PresetSize, Workspace as WorkspaceConfig,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
-use smithay::backend::renderer::element::utils::{
-    Relocate, RelocateRenderElement, RescaleRenderElement,
-};
+use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::{layer_map_for_output, Window};
@@ -36,6 +34,7 @@ use super::{
 use crate::animation::{Animation, Clock};
 use crate::layout::RenderLayer;
 use crate::niri_render_elements;
+use crate::render_helpers::overview_rescale::OverviewRescaleRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -176,7 +175,8 @@ niri_render_elements! {
     WorkspaceRenderElement<R> => {
         Scrolling = ScrollingSpaceRenderElement<R>,
         Floating = FloatingSpaceRenderElement<R>,
-        GridTile = RelocateRenderElement<RescaleRenderElement<ScrollingSpaceRenderElement<R>>>,
+        GridTile =
+            RelocateRenderElement<OverviewRescaleRenderElement<ScrollingSpaceRenderElement<R>>>,
     }
 }
 
@@ -2847,7 +2847,8 @@ impl<W: LayoutElement> Workspace<W> {
                     }
                     let elem: ScrollingSpaceRenderElement<R> = elem.into();
                     let origin = Point::<i32, smithay::utils::Physical>::from((0, 0));
-                    let elem = RescaleRenderElement::from_element(elem, origin, item_visual_scale);
+                    let elem =
+                        OverviewRescaleRenderElement::from_element(elem, origin, item_visual_scale);
                     let phys_pos = item_visual_pos.to_physical_precise_round(scale);
                     let elem =
                         RelocateRenderElement::from_element(elem, phys_pos, Relocate::Relative);
@@ -2884,8 +2885,11 @@ impl<W: LayoutElement> Workspace<W> {
                         |elem: super::tab_indicator::TabIndicatorRenderElement| {
                             let elem: ScrollingSpaceRenderElement<R> = elem.into();
                             let origin = Point::<i32, smithay::utils::Physical>::from((0, 0));
-                            let elem =
-                                RescaleRenderElement::from_element(elem, origin, item_visual_scale);
+                            let elem = OverviewRescaleRenderElement::from_element(
+                                elem,
+                                origin,
+                                item_visual_scale,
+                            );
                             let phys_pos = item_visual_pos.to_physical_precise_round(scale);
                             let elem = RelocateRenderElement::from_element(
                                 elem,
