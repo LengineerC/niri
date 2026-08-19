@@ -5310,11 +5310,15 @@ impl Niri {
         &self,
         renderer: &mut GlesRenderer,
         output: &Output,
-    ) -> Option<[TextureBuffer<GlesTexture>; 2]> {
+    ) -> Option<[TextureBuffer<GlesTexture>; 3]> {
         let mode = output.current_mode()?;
         let size = output.current_transform().transform_size(mode.size);
         let scale = Scale::from(output.current_scale().fractional_scale());
-        let targets = [RenderTarget::Output, RenderTarget::Screencast];
+        let targets = [
+            RenderTarget::Output,
+            RenderTarget::Screencast,
+            RenderTarget::ScreenCapture,
+        ];
         let buffers = targets.map(|target| {
             let ctx = RenderCtx {
                 renderer: &mut *renderer,
@@ -5677,7 +5681,7 @@ impl Niri {
 
         #[cfg(feature = "xdp-gnome-screencast")]
         if self.screen_cast_picker.is_visible()
-            && should_render_screen_cast_picker(_rendering_output, ctx.target, ctx.intent)
+            && should_render_screen_cast_picker(_rendering_output, ctx.intent)
         {
             let frozen = self
                 .screen_cast_picker
@@ -8360,12 +8364,10 @@ impl<'render>
 }
 
 #[cfg(feature = "xdp-gnome-screencast")]
-fn should_render_screen_cast_picker(
-    rendering_output: bool,
-    target: RenderTarget,
-    intent: RenderIntent,
-) -> bool {
-    rendering_output || (target == RenderTarget::Screencast && intent == RenderIntent::Normal)
+fn should_render_screen_cast_picker(rendering_output: bool, intent: RenderIntent) -> bool {
+    // Render the picker into screencasts and screen captures (screencopy, i.e. wf-recorder and
+    // friends), but never into its own window/display previews.
+    rendering_output || intent == RenderIntent::Normal
 }
 
 #[cfg(feature = "xdp-gnome-screencast")]
@@ -8394,26 +8396,12 @@ mod screen_cast_picker_preview_tests {
     }
 
     #[test]
-    fn picker_is_visible_to_outputs_and_real_monitor_casts_only() {
-        assert!(should_render_screen_cast_picker(
-            true,
-            RenderTarget::Output,
-            RenderIntent::Normal
-        ));
-        assert!(should_render_screen_cast_picker(
-            false,
-            RenderTarget::Screencast,
-            RenderIntent::Normal
-        ));
+    fn picker_is_visible_to_outputs_and_normal_captures_only() {
+        assert!(should_render_screen_cast_picker(true, RenderIntent::Normal));
+        assert!(should_render_screen_cast_picker(false, RenderIntent::Normal));
         assert!(!should_render_screen_cast_picker(
             false,
-            RenderTarget::Screencast,
             RenderIntent::PickerPreview
-        ));
-        assert!(!should_render_screen_cast_picker(
-            false,
-            RenderTarget::ScreenCapture,
-            RenderIntent::Normal
         ));
     }
 }

@@ -207,14 +207,23 @@ mod enabled {
     enum PickerRenderVariant {
         Output = 0,
         Screencast = 1,
+        ScreenCapture = 2,
     }
 
     impl PickerRenderVariant {
         fn from_target(target: RenderTarget) -> Self {
-            if target == RenderTarget::Screencast {
-                Self::Screencast
-            } else {
-                Self::Output
+            match target {
+                RenderTarget::Output => Self::Output,
+                RenderTarget::Screencast => Self::Screencast,
+                RenderTarget::ScreenCapture => Self::ScreenCapture,
+            }
+        }
+
+        fn capture_target(self) -> Option<RenderTarget> {
+            match self {
+                Self::Output => None,
+                Self::Screencast => Some(RenderTarget::Screencast),
+                Self::ScreenCapture => Some(RenderTarget::ScreenCapture),
             }
         }
     }
@@ -286,8 +295,8 @@ mod enabled {
 
     struct FrozenBackdrop {
         output: WeakOutput,
-        // Output and screencast variants.
-        buffers: [TextureBuffer<GlesTexture>; 2],
+        // Output, screencast and screen capture variants.
+        buffers: [TextureBuffer<GlesTexture>; 3],
     }
 
     pub struct DisplayPreviewRequest {
@@ -353,7 +362,7 @@ mod enabled {
         display_preview_last_refresh: Cell<Option<Duration>>,
         window_previews: RefCell<WindowPreviewCache>,
         frozen_backdrop: RefCell<Option<FrozenBackdrop>>,
-        transition_buffers: [OffscreenBuffer; 2],
+        transition_buffers: [OffscreenBuffer; 3],
         clock: Clock,
         config: Rc<RefCell<Config>>,
     }
@@ -378,7 +387,11 @@ mod enabled {
                 display_preview_last_refresh: Cell::new(None),
                 window_previews: RefCell::new(WindowPreviewCache::default()),
                 frozen_backdrop: RefCell::new(None),
-                transition_buffers: [OffscreenBuffer::default(), OffscreenBuffer::default()],
+                transition_buffers: [
+                    OffscreenBuffer::default(),
+                    OffscreenBuffer::default(),
+                    OffscreenBuffer::default(),
+                ],
                 clock,
                 config,
             }
@@ -542,7 +555,7 @@ mod enabled {
             output: Output,
             displays: Vec<PickerCandidate>,
             windows: Vec<PickerCandidate>,
-            frozen_backdrop: Option<[TextureBuffer<GlesTexture>; 2]>,
+            frozen_backdrop: Option<[TextureBuffer<GlesTexture>; 3]>,
         ) -> bool {
             if self.is_visible() {
                 request.fail("screen cast picker is already open");
@@ -891,7 +904,7 @@ mod enabled {
                 return false;
             }
 
-            let index = usize::from(target == RenderTarget::Screencast);
+            let index = PickerRenderVariant::from_target(target) as usize;
             let element = TextureRenderElement::from_texture_buffer(
                 backdrop.buffers[index].clone(),
                 Point::new(0., 0.),
@@ -933,7 +946,7 @@ mod enabled {
             let palette = PickerPalette::from(self.config.borrow().screen_cast_picker);
             let geometry = picker_geometry(output, state);
             let variant = PickerRenderVariant::from_target(ctx.target);
-            let blocked_window_ids = if variant == PickerRenderVariant::Screencast {
+            let blocked_window_ids = if let Some(capture_target) = variant.capture_target() {
                 geometry
                     .cards
                     .iter()
@@ -947,7 +960,7 @@ mod enabled {
                             .layout
                             .windows()
                             .find(|(_, mapped)| mapped.id().get() == id)?;
-                        RenderTarget::Screencast
+                        capture_target
                             .should_block_out(mapped.rules().block_out_from)
                             .then_some(id)
                     })
@@ -2136,14 +2149,14 @@ mod enabled {
         }
 
         #[test]
-        fn screencast_uses_a_separate_picker_render_variant() {
+        fn each_render_target_uses_its_own_picker_render_variant() {
             assert_eq!(
                 PickerRenderVariant::from_target(RenderTarget::Output),
                 PickerRenderVariant::Output
             );
             assert_eq!(
                 PickerRenderVariant::from_target(RenderTarget::ScreenCapture),
-                PickerRenderVariant::Output
+                PickerRenderVariant::ScreenCapture
             );
             assert_eq!(
                 PickerRenderVariant::from_target(RenderTarget::Screencast),
