@@ -6197,6 +6197,69 @@ fn grid_move_window_down_twice_midflight_keeps_visual_continuity() {
     assert!(go.flying_in_windows.contains(&2));
 }
 
+#[test]
+fn grid_focus_switch_preserves_shrink_velocity() {
+    use niri_config::animations::{Kind, SpringParams};
+
+    let mut options = Options::default();
+    options.animations.window_resize.anim.kind = Kind::Spring(SpringParams {
+        damping_ratio: 0.9,
+        stiffness: 500,
+        epsilon: 0.0001,
+    });
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::AddWindow {
+                params: TestWindowParams::new(2),
+            },
+            Op::AddWindow {
+                params: TestWindowParams::new(3),
+            },
+            Op::FocusWindow(1),
+            Op::ToggleGridOverview,
+            Op::CompleteAnimations,
+        ],
+    );
+
+    layout
+        .active_workspace_mut()
+        .unwrap()
+        .set_grid_focus_for_window(&2);
+    // Match the user config's `slowdown 5` so the velocity conversion is exercised.
+    layout.clock.set_rate(0.2);
+
+    let scale_at = |layout: &mut Layout<TestWindow>, t: u64| {
+        layout.clock.set_unadjusted(Duration::from_millis(t));
+        layout.advance_animations();
+        layout
+            .active_workspace()
+            .unwrap()
+            .grid_window_visual_transform(&1)
+            .unwrap()
+            .1
+    };
+
+    let s49 = scale_at(&mut layout, 49);
+    let s50 = scale_at(&mut layout, 50);
+    layout
+        .active_workspace_mut()
+        .unwrap()
+        .set_grid_focus_for_window(&3);
+    let s51 = scale_at(&mut layout, 51);
+
+    let before = (s50 - s49) * 1000.;
+    let after = (s51 - s50) * 1000.;
+    assert!(before < -0.01);
+    // The shrinking window must keep a meaningful portion of its velocity across the focus
+    // switch instead of restarting from zero and hitching.
+    assert!(after < before * 0.1, "before {before} after {after}");
+}
+
 fn grid_layout_with_occupied_workspace_below() -> Layout<TestWindow> {
     let mut layout = check_ops([
         Op::AddOutput(1),

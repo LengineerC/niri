@@ -1,5 +1,7 @@
 use std::rc::Rc;
+use std::time::Duration;
 
+use niri_config::animations::Kind;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::{Animation, Clock, LayoutElement, Options, OverviewProgress};
@@ -517,6 +519,19 @@ impl<W: LayoutElement> GridOverview<W> {
         )
     }
 
+    /// Animation used for grid focus boost.
+    ///
+    /// Focus boost is an internal scale animation; it must be monotonic. User window-resize
+    /// springs can be underdamped, which makes `clamped_value()` freeze at the target with
+    /// non-zero velocity and causes a visible hitch when a window shrinks back.
+    fn focus_boost_animation(&self) -> niri_config::Animation {
+        let mut anim = self.options.animations.window_resize.anim;
+        if let Kind::Spring(params) = &mut anim.kind {
+            params.damping_ratio = params.damping_ratio.max(1.0);
+        }
+        anim
+    }
+
     pub fn set_focus(&mut self, focus: (usize, usize)) {
         if self.focus == focus {
             return;
@@ -524,14 +539,27 @@ impl<W: LayoutElement> GridOverview<W> {
 
         let old_focus = self.focus;
         if self.open {
+            // Preserve the current focus-boost velocity when retargeting. Restarting from zero
+            // every time makes rapidly-switched windows visibly hitch.
+            let clock_rate = self.clock.rate();
+            let velocity = self.focus_boost_anim.as_ref().map_or(0., |anim| {
+                let now = self.clock.now();
+                let dt = Duration::from_millis(1);
+                let prev = anim.value_at(now.saturating_sub(dt));
+                let raw = (anim.value_at(now) - prev) / dt.as_secs_f64();
+                // Animation::new() divides the initial velocity by the clock rate, so convert
+                // the derivative back to unadjusted time.
+                raw * clock_rate
+            });
+
             self.snapshot_focus_boosts();
             self.previous_focus = Some(old_focus);
             self.focus_boost_anim = Some(Animation::new(
                 self.clock.clone(),
                 0.,
                 1.,
-                0.,
-                self.options.animations.window_resize.anim,
+                velocity,
+                self.focus_boost_animation(),
             ));
         }
 
@@ -551,7 +579,7 @@ impl<W: LayoutElement> GridOverview<W> {
                 0.,
                 1.,
                 0.,
-                self.options.animations.window_resize.anim,
+                self.focus_boost_animation(),
             ));
         }
 
@@ -667,7 +695,7 @@ impl<W: LayoutElement> GridOverview<W> {
                             0.,
                             1.,
                             0.,
-                            self.options.animations.window_resize.anim,
+                            self.focus_boost_animation(),
                         ));
                         return Some((col_idx, new_tile_idx));
                     }
@@ -684,7 +712,7 @@ impl<W: LayoutElement> GridOverview<W> {
                             0.,
                             1.,
                             0.,
-                            self.options.animations.window_resize.anim,
+                            self.focus_boost_animation(),
                         ));
                         return Some((col_idx, new_tile_idx));
                     }
