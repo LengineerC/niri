@@ -1,0 +1,107 @@
+# Maintainer: LengineerC <lengineerc@outlook.com>
+
+pkgname=niri-custom-git
+pkgver=26.04.r0.g0000000
+pkgrel=1
+pkgdesc='A scrollable-tiling Wayland compositor (LengineerC custom build)'
+arch=(x86_64)
+url='https://github.com/LengineerC/niri'
+license=(GPL-3.0-or-later)
+depends=(
+  cairo
+  glib2
+  glibc
+  libdisplay-info
+  libgcc
+  libinput
+  libpipewire
+  libxkbcommon
+  mesa
+  pango
+  pixman
+  seatd
+  systemd-libs
+  xdg-desktop-portal-impl
+)
+makedepends=(
+  clang
+  git
+  rust
+)
+optdepends=(
+  'alacritty: a suggested GPU-accelerated terminal emulator'
+  'bash: for niri-session script'
+  'fuzzel: a suggested Wayland application launcher'
+  'mako: a suggested Wayland notification daemon'
+  'org.freedesktop.secrets: for apps to rely on secrets portal'
+  'swaybg: a suggested Wayland wallpaper tool'
+  'swaylock: a suggested Wayland screen locker'
+  'waybar: a suggested Wayland customizable bar'
+  'xwayland-satellite: for running X11 applications through Xwayland'
+  'xdg-desktop-portal-gtk: a suggested desktop portal'
+  'xdg-desktop-portal-gnome: a desktop portal required for screencasting'
+)
+provides=(
+  niri
+  wayland-compositor
+)
+conflicts=(niri)
+source=('niri::git+https://github.com/LengineerC/niri.git#branch=main')
+b2sums=('SKIP')
+
+pkgver() {
+  cd niri
+
+  git describe --long --tags --match 'v[0-9]*' \
+    | sed 's/^v//;s/-/.r/;s/-/./'
+}
+
+prepare() {
+  cd niri
+
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd niri
+
+  export NIRI_BUILD_COMMIT
+  NIRI_BUILD_COMMIT="$(git rev-parse --short HEAD)"
+  CFLAGS+=' -ffat-lto-objects'
+
+  cargo build --frozen --release --features default
+
+  for shell in bash fish zsh; do
+    target/release/niri completions "$shell" >"$srcdir/$shell-completions"
+  done
+}
+
+check() {
+  cd niri
+
+  export XDG_RUNTIME_DIR="$srcdir/xdg-runtime"
+  export RAYON_NUM_THREADS=1
+  install -dm700 "$XDG_RUNTIME_DIR"
+
+  cargo test --workspace --exclude niri-visual-tests --frozen
+}
+
+package() {
+  cd niri
+
+  install -vDm755 target/release/niri resources/niri-session -t "$pkgdir/usr/bin/"
+  install -vDm644 resources/niri.service resources/niri-shutdown.target \
+    -t "$pkgdir/usr/lib/systemd/user/"
+  install -vDm644 resources/niri.desktop -t "$pkgdir/usr/share/wayland-sessions/"
+  install -vDm644 resources/niri-portals.conf \
+    -t "$pkgdir/usr/share/xdg-desktop-portal/"
+  install -vDm644 resources/default-config.kdl README.md \
+    -t "$pkgdir/usr/share/doc/niri/"
+
+  install -vDm644 "$srcdir/bash-completions" \
+    "$pkgdir/usr/share/bash-completion/completions/niri"
+  install -vDm644 "$srcdir/fish-completions" \
+    "$pkgdir/usr/share/fish/vendor_completions.d/niri.fish"
+  install -vDm644 "$srcdir/zsh-completions" \
+    "$pkgdir/usr/share/zsh/site-functions/_niri"
+}
