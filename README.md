@@ -134,3 +134,19 @@ We also have a community Discord server: https://discord.gg/vT8Sfjy7sx
 [OpenTabletDriver]: https://opentabletdriver.net/
 [DankMaterialShell]: https://danklinux.com/
 [Noctalia]: https://noctalia.dev/
+
+---
+
+## 修改
+
+- 打上了补丁[1791](https://github.com/YaLTeR/niri/pull/1791)，可以正常使用腾讯会议，同时还需要在`config.kdl`里面添加一行`spawn-sh-at-startup "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=niri"`
+- 合并了[shorin niri](https://github.com/SHORiN-KiWATA/niri)的鼠标晃动变大和窗口行为修复补丁
+
+- 会偶尔修改自己用起来不舒服的地方，或者添加新功能
+
+## 安装
+
+### Arch
+
+- 暂时没发AUR，进入`packaging/arch`目录下`makepkg -si`就行，同包名可以直接覆盖官方niri
+
