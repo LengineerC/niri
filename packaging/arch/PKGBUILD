@@ -1,7 +1,7 @@
 # Maintainer: LengineerC <lengineerc@outlook.com>
 
-pkgname=niri-custom-git
-pkgver=26.04.r0.g0000000
+pkgname=niri
+pkgver=26.4.0.r2862.g7999a3a5
 pkgrel=1
 pkgdesc='A scrollable-tiling Wayland compositor (LengineerC custom build)'
 arch=(x86_64)
@@ -42,18 +42,30 @@ optdepends=(
   'xdg-desktop-portal-gnome: a desktop portal required for screencasting'
 )
 provides=(
-  niri
   wayland-compositor
 )
-conflicts=(niri)
 source=('niri::git+https://github.com/LengineerC/niri.git#branch=main')
 b2sums=('SKIP')
 
 pkgver() {
   cd niri
 
-  git describe --long --tags --match 'v[0-9]*' \
-    | sed 's/^v//;s/-/.r/;s/-/./'
+  local described_version
+  if described_version="$(git describe --long --tags --match 'v[0-9]*' 2>/dev/null)"; then
+    sed 's/^v//;s/-/.r/;s/-/./' <<<"$described_version"
+    return
+  fi
+
+  local base_version
+  base_version="$(
+    sed -n '/^\[workspace.package\]/,/^\[workspace.dependencies\]/ {
+      s/^version = "\([^"]*\)"/\1/p
+    }' Cargo.toml
+  )"
+  printf '%s.r%s.g%s\n' \
+    "$base_version" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
