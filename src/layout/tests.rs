@@ -6539,6 +6539,14 @@ fn grid_interactive_move_keeps_visual_scale_and_can_merge() {
     };
     approx::assert_abs_diff_eq!(move_.visual_scale, visual_scale, epsilon = 0.001);
     approx::assert_abs_diff_eq!(move_.total_scale(1.), visual_scale, epsilon = 0.001);
+    let shader_params = move_
+        .movement_shader_params()
+        .expect("interactive movement should provide shader parameters");
+    assert_eq!(shader_params.move_from, shader_params.move_offset);
+    assert_eq!(shader_params.progress, 0.);
+    assert_eq!(shader_params.clamped_progress, 0.);
+    assert!(shader_params.move_from.x > 0.);
+    assert!(shader_params.move_from.x.hypot(shader_params.move_from.y) <= 400.);
 
     // While the grab is ongoing, the focus belongs to the grabbed window itself, so that no
     // other cell gets a spurious focus boost that would animate away on drop.

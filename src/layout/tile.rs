@@ -1416,6 +1416,13 @@ impl<W: LayoutElement> Tile<W> {
                 Some(clamped_progress.map_or(y_clamped_progress, |x| x.min(y_clamped_progress)));
         }
 
+        if self.interactive_move_offset != Point::from((0., 0.)) {
+            move_from += self.interactive_move_offset;
+            move_offset += self.interactive_move_offset;
+            progress = Some(progress.unwrap_or(0.));
+            clamped_progress = Some(clamped_progress.unwrap_or(0.));
+        }
+
         Some(MovementShaderParams {
             move_from,
             move_offset,
