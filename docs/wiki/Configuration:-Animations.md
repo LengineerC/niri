@@ -316,7 +316,6 @@ Movement of individual windows within a workspace.
 
 Includes:
 
-- Interactively dragging a window with the pointer or touch.
 - Moving window columns with `move-column-left` and `move-column-right`.
 - Moving windows inside a column with `move-window-up` and `move-window-down`.
 - Moving windows out of the way upon window opening and closing.

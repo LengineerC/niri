@@ -75,7 +75,10 @@ impl MovementShader {
 
         // OffscreenBuffer renders with Transform::Normal and the scale that we passed, so we can
         // assume that below.
-        let texture_offset = elem.offset();
+        // Movement rendering passes elements in output-local coordinates so background effects
+        // can be split out and rendered against the real output framebuffer. Convert the
+        // offscreen's absolute offset back to window-relative coordinates for the shader math.
+        let texture_offset = elem.offset() - location;
         let texture = elem.texture();
         let texture_size = elem.logical_size();
 

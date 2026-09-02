@@ -58,7 +58,6 @@ use self::monitor::{Monitor, WorkspaceSwitch};
 use self::workspace::{GridWindowVisual, OutputId, Workspace};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
-use crate::layout::moving_window::MovementShaderParams;
 use crate::layout::scrolling::ScrollDirection;
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
@@ -453,11 +452,6 @@ struct InteractiveMoveData<W: LayoutElement> {
     pub(self) output: Output,
     /// Current pointer position within output.
     pub(self) pointer_pos_within_output: Point<f64, Logical>,
-    /// Accumulated pointer movement, in the tile's unscaled coordinate space.
-    ///
-    /// Interactive movement does not have an animation timeline, so this is used as both the
-    /// movement direction and current displacement for the custom window movement shader.
-    pub(self) shader_move_from: Point<f64, Logical>,
     /// Window column width.
     pub(self) width: ColumnWidth,
     /// Whether the window column was full-width.
@@ -652,30 +646,6 @@ impl<W: LayoutElement> InteractiveMoveData<W> {
                 .upscale(total_scale);
         // Round to physical pixels.
         pos.to_physical_precise_round(scale).to_logical(scale)
-    }
-
-    fn movement_shader_params(&self) -> Option<MovementShaderParams> {
-        let mut movement = self.shader_move_from;
-        let distance = movement.x.hypot(movement.y);
-        if distance <= 0.001 {
-            return None;
-        }
-
-        // MovementShader expands its render area to cover the movement vector. Limit the vector
-        // for interactive drags so dragging across multiple outputs cannot create an excessively
-        // large render element. Four hundred logical pixels is already enough for shaders to infer
-        // the direction and reach a strong visible effect.
-        const MAX_SHADER_MOVEMENT: f64 = 400.;
-        if distance > MAX_SHADER_MOVEMENT {
-            movement = movement.downscale(distance / MAX_SHADER_MOVEMENT);
-        }
-
-        Some(MovementShaderParams {
-            move_from: movement,
-            move_offset: movement,
-            progress: 0.,
-            clamped_progress: 0.,
-        })
     }
 }
 
@@ -4706,9 +4676,6 @@ impl<W: LayoutElement> Layout<W> {
                         )
                     })
                     .unwrap();
-                if tile.interactive_move_offset == Point::from((0., 0.)) {
-                    tile.restart_movement_shader();
-                }
                 tile.interactive_move_offset = pointer_delta.upscale(factor);
 
                 // Put it back to be able to easily return.
@@ -4824,7 +4791,6 @@ impl<W: LayoutElement> Layout<W> {
                     tile,
                     output,
                     pointer_pos_within_output,
-                    shader_move_from: pointer_delta.downscale(visual_scale),
                     width,
                     is_full_width,
                     is_floating,
@@ -4848,9 +4814,6 @@ impl<W: LayoutElement> Layout<W> {
                     self.interactive_move = Some(InteractiveMoveState::Moving(move_));
                     return false;
                 }
-
-                let total_scale = move_.total_scale(self.overview_zoom());
-                move_.shader_move_from += delta.downscale(total_scale);
 
                 let mut ws_id = None;
                 if let Some(mon) = self.monitor_for_output(&output) {
@@ -5681,21 +5644,15 @@ impl<W: LayoutElement> Layout<W> {
         let pos_in_backdrop = move_.tile_render_location(zoom);
         let xray_pos = XrayPos::new(pos_in_backdrop, total_scale);
 
-        let movement = move_.movement_shader_params();
-        move_.tile.render_with_movement(
-            ctx,
-            pos_in_backdrop,
-            xray_pos,
-            true,
-            movement,
-            &mut |elem| {
+        move_
+            .tile
+            .render(ctx, pos_in_backdrop, xray_pos, true, &mut |elem| {
                 push(RescaleRenderElement::from_element(
                     elem,
                     pos_in_backdrop.to_physical_precise_round(scale),
                     total_scale,
                 ));
-            },
-        );
+            });
     }
 
     pub fn refresh(&mut self, is_active: bool) {

@@ -1416,13 +1416,6 @@ impl<W: LayoutElement> Tile<W> {
                 Some(clamped_progress.map_or(y_clamped_progress, |x| x.min(y_clamped_progress)));
         }
 
-        if self.interactive_move_offset != Point::from((0., 0.)) {
-            move_from += self.interactive_move_offset;
-            move_offset += self.interactive_move_offset;
-            progress = Some(progress.unwrap_or(0.));
-            clamped_progress = Some(clamped_progress.unwrap_or(0.));
-        }
-
         Some(MovementShaderParams {
             move_from,
             move_offset,
@@ -1530,13 +1523,18 @@ impl<W: LayoutElement> Tile<W> {
                 let mut ctx = ctx.as_gles();
                 if MovementShader::has_shader(ctx.renderer) {
                     let mut elements = Vec::new();
-                    self.render_inner(
-                        ctx.r(),
-                        Point::new(0., 0.),
-                        xray_pos,
-                        focus_ring,
-                        &mut |elem| elements.push(elem),
-                    );
+                    let mut background_effects = Vec::new();
+                    self.render_inner(ctx.r(), location, xray_pos, focus_ring, &mut |elem| {
+                        match elem {
+                            // Background effects need to sample the real output framebuffer.
+                            // Rendering them into the transparent movement offscreen would make
+                            // blur disappear for the duration of the animation.
+                            TileRenderElement::BackgroundEffect(elem) => {
+                                background_effects.push(elem)
+                            }
+                            elem => elements.push(elem),
+                        }
+                    });
                     match self.movement_shader.render(
                         ctx.renderer,
                         &elements,
@@ -1549,6 +1547,12 @@ impl<W: LayoutElement> Tile<W> {
                         Ok((elem, data)) => {
                             self.window().set_offscreen_data(Some(data));
                             push(elem.into());
+                            // Render these after the movement element: render-element lists are
+                            // ordered front-to-back, so the effects remain behind the window while
+                            // sampling the real output framebuffer.
+                            for elem in background_effects {
+                                push(elem.into());
+                            }
                             pushed = true;
                         }
                         Err(err) => {

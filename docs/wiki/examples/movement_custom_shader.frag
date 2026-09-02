@@ -49,20 +49,28 @@ uniform vec2 niri_move_offset;
 // Random float in [0, 1), stable for the duration of one movement animation.
 uniform float niri_random_seed;
 
-// Example: bend the window perpendicular to its direction of movement. The
-// bend follows the remaining distance, including spring overshoot.
+// Example: keep the cross-axis edges fixed while the middle bulges in the
+// direction of travel. The effect relaxes as the remaining distance approaches zero.
 vec4 wobble(vec3 coords_geo, vec3 size_geo) {
-    vec2 direction = niri_move_from;
+    const float PI = 3.14159265;
+
+    // niri_move_from points from the destination back to the start, so negate it
+    // to get the actual direction of travel.
+    vec2 direction = -niri_move_from;
     float distance = length(direction);
-    if (distance > 0.001)
-        direction /= distance;
+    if (distance < 0.001) {
+        vec3 coords_tex = niri_geo_to_tex * coords_geo;
+        return texture2D(niri_tex, coords_tex.st);
+    }
+    direction /= distance;
 
-    vec2 perpendicular = vec2(-direction.y, direction.x);
-    float remaining = length(niri_move_offset);
-    float strength = min(remaining * 0.08, 32.0);
-    float wave = sin(coords_geo.x * 3.14159265) * sin(coords_geo.y * 3.14159265);
+    float remaining = clamp(length(niri_move_offset) / distance, 0.0, 1.0);
 
-    vec2 displacement = perpendicular * strength * wave;
+    float cross_axis = abs(direction.x) >= abs(direction.y)
+                     ? coords_geo.y : coords_geo.x;
+    float bulge = sin(clamp(cross_axis, 0.0, 1.0) * PI);
+    float strength = min(distance * 0.18, 96.0) * remaining;
+    vec2 displacement = direction * strength * bulge;
     coords_geo.xy -= displacement / size_geo.xy;
 
     vec3 coords_tex = niri_geo_to_tex * coords_geo;
