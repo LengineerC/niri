@@ -9,6 +9,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
 use super::focus_ring::{FocusRing, FocusRingRenderElement};
+use super::moving_window::{MovementShader, MovementShaderParams};
 use super::opening_window::{OpenAnimation, OpeningWindowRenderElement};
 use super::shadow::Shadow;
 use super::{
@@ -25,6 +26,7 @@ use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenRenderElement};
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::resize::ResizeRenderElement;
+use crate::render_helpers::shader_element::ShaderRenderElement;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -106,6 +108,9 @@ pub struct Tile<W: LayoutElement> {
     /// The animation of a tile visually moving vertically.
     move_y_animation: Option<MoveAnimation>,
 
+    /// State used to render the custom window movement shader.
+    movement_shader: MovementShader,
+
     /// The animation of the tile's opacity.
     pub(super) alpha_animation: Option<AlphaAnimation>,
 
@@ -139,6 +144,7 @@ niri_render_elements! {
         FocusRing = FocusRingRenderElement,
         SolidColor = SolidColorRenderElement,
         Opening = OpeningWindowRenderElement,
+        Movement = ShaderRenderElement,
         Resize = ResizeRenderElement,
         Border = BorderRenderElement,
         Shadow = ShadowRenderElement,
@@ -222,6 +228,7 @@ impl<W: LayoutElement> Tile<W> {
             resize_animation: None,
             move_x_animation: None,
             move_y_animation: None,
+            movement_shader: MovementShader::default(),
             alpha_animation: None,
             interactive_move_offset: Point::from((0., 0.)),
             unmap_snapshot: None,
@@ -605,7 +612,7 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn animate_move_from(&mut self, from: Point<f64, Logical>) {
-        self.animate_move_from_with_config(from, self.options.animations.window_movement.0);
+        self.animate_move_from_with_config(from, self.options.animations.window_movement.anim);
     }
 
     pub fn animate_move_from_with_config(
@@ -618,10 +625,11 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn animate_move_x_from(&mut self, from: f64) {
-        self.animate_move_x_from_with_config(from, self.options.animations.window_movement.0);
+        self.animate_move_x_from_with_config(from, self.options.animations.window_movement.anim);
     }
 
     pub fn animate_move_x_from_with_config(&mut self, from: f64, config: niri_config::Animation) {
+        let is_new_movement = self.move_x_animation.is_none() && self.move_y_animation.is_none();
         let current_offset = self.render_offset().x;
 
         // Preserve the previous config if ongoing.
@@ -639,13 +647,18 @@ impl<W: LayoutElement> Tile<W> {
             from: from + current_offset,
             is_between_workspaces: current_between,
         });
+
+        if is_new_movement {
+            self.movement_shader.restart();
+        }
     }
 
     pub fn animate_move_y_from(&mut self, from: f64) {
-        self.animate_move_y_from_with_config(from, self.options.animations.window_movement.0);
+        self.animate_move_y_from_with_config(from, self.options.animations.window_movement.anim);
     }
 
     pub fn animate_move_y_from_with_config(&mut self, from: f64, config: niri_config::Animation) {
+        let is_new_movement = self.move_x_animation.is_none() && self.move_y_animation.is_none();
         let current_offset = self.render_offset().y;
 
         // Preserve the previous config if ongoing.
@@ -663,6 +676,10 @@ impl<W: LayoutElement> Tile<W> {
             from: from + current_offset,
             is_between_workspaces: current_between,
         });
+
+        if is_new_movement {
+            self.movement_shader.restart();
+        }
     }
 
     pub fn offset_move_y_anim_current(&mut self, offset: f64) {
@@ -679,6 +696,10 @@ impl<W: LayoutElement> Tile<W> {
     pub fn stop_move_animations(&mut self) {
         self.move_x_animation = None;
         self.move_y_animation = None;
+    }
+
+    pub(super) fn restart_movement_shader(&mut self) {
+        self.movement_shader.restart();
     }
 
     pub fn set_anim_y_between_workspaces(&mut self) {
@@ -1370,6 +1391,39 @@ impl<W: LayoutElement> Tile<W> {
         );
     }
 
+    fn movement_shader_params(&self) -> Option<MovementShaderParams> {
+        let mut move_from = Point::from((0., 0.));
+        let mut move_offset = Point::from((0., 0.));
+        let mut progress: Option<f64> = None;
+        let mut clamped_progress: Option<f64> = None;
+
+        if let Some(move_) = &self.move_x_animation {
+            let value = move_.anim.value();
+            move_from.x = move_.from;
+            move_offset.x = move_.from * value;
+            progress = Some(1. - value);
+            clamped_progress = Some(1. - move_.anim.clamped_value());
+        }
+
+        if let Some(move_) = &self.move_y_animation {
+            let value = move_.anim.value();
+            move_from.y = move_.from;
+            move_offset.y = move_.from * value;
+            let y_progress = 1. - value;
+            let y_clamped_progress = 1. - move_.anim.clamped_value();
+            progress = Some(progress.map_or(y_progress, |x| x.min(y_progress)));
+            clamped_progress =
+                Some(clamped_progress.map_or(y_clamped_progress, |x| x.min(y_clamped_progress)));
+        }
+
+        Some(MovementShaderParams {
+            move_from,
+            move_offset,
+            progress: progress?,
+            clamped_progress: clamped_progress?.clamp(0., 1.),
+        })
+    }
+
     pub fn render<R: NiriRenderer>(
         &self,
         ctx: RenderCtx<R>,
@@ -1378,7 +1432,21 @@ impl<W: LayoutElement> Tile<W> {
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
-        self.render_with_alpha_animations(ctx, location, xray_pos, focus_ring, true, push);
+        self.render_with_alpha_animations(ctx, location, xray_pos, focus_ring, true, None, push);
+    }
+
+    pub(super) fn render_with_movement<R: NiriRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        location: Point<f64, Logical>,
+        xray_pos: XrayPos,
+        focus_ring: bool,
+        movement: Option<MovementShaderParams>,
+        push: &mut dyn FnMut(TileRenderElement<R>),
+    ) {
+        self.render_with_alpha_animations(
+            ctx, location, xray_pos, focus_ring, true, movement, push,
+        );
     }
 
     pub fn render_ignoring_alpha_animation<R: NiriRenderer>(
@@ -1389,9 +1457,10 @@ impl<W: LayoutElement> Tile<W> {
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
-        self.render_with_alpha_animations(ctx, location, xray_pos, focus_ring, false, push);
+        self.render_with_alpha_animations(ctx, location, xray_pos, focus_ring, false, None, push);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_with_alpha_animations<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -1399,6 +1468,7 @@ impl<W: LayoutElement> Tile<W> {
         xray_pos: XrayPos,
         focus_ring: bool,
         alpha_animations: bool,
+        parent_movement: Option<MovementShaderParams>,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
         let _span = tracy_client::span!("Tile::render");
@@ -1443,28 +1513,67 @@ impl<W: LayoutElement> Tile<W> {
                     warn!("error rendering window opening animation: {err:?}");
                 }
             }
-        } else if alpha_animations {
-            if let Some(alpha) = &self.alpha_animation {
+        } else {
+            let movement = match (self.movement_shader_params(), parent_movement) {
+                (Some(tile), Some(parent)) => Some(tile.combined_with(parent)),
+                (Some(tile), None) => Some(tile),
+                (None, parent) => parent,
+            };
+            if let Some(movement) = movement {
                 let mut ctx = ctx.as_gles();
-                let mut elements = Vec::new();
-                self.render_inner(
-                    ctx.r(),
-                    Point::new(0., 0.),
-                    xray_pos,
-                    focus_ring,
-                    &mut |elem| elements.push(elem),
-                );
-                match alpha.offscreen.render(ctx.renderer, scale, &elements) {
-                    Ok((elem, _sync, data)) => {
-                        let offset = elem.offset();
-                        let elem = elem.with_alpha(tile_alpha).with_offset(location + offset);
-
-                        self.window().set_offscreen_data(Some(data));
-                        push(elem.into());
-                        pushed = true;
+                if MovementShader::has_shader(ctx.renderer) {
+                    let mut elements = Vec::new();
+                    self.render_inner(
+                        ctx.r(),
+                        Point::new(0., 0.),
+                        xray_pos,
+                        focus_ring,
+                        &mut |elem| elements.push(elem),
+                    );
+                    match self.movement_shader.render(
+                        ctx.renderer,
+                        &elements,
+                        self.animated_tile_size(),
+                        location,
+                        scale,
+                        tile_alpha,
+                        movement,
+                    ) {
+                        Ok((elem, data)) => {
+                            self.window().set_offscreen_data(Some(data));
+                            push(elem.into());
+                            pushed = true;
+                        }
+                        Err(err) => {
+                            warn!("error rendering window movement shader: {err:?}");
+                        }
                     }
-                    Err(err) => {
-                        warn!("error rendering tile to offscreen for alpha animation: {err:?}");
+                }
+            }
+
+            if !pushed && alpha_animations {
+                if let Some(alpha) = &self.alpha_animation {
+                    let mut ctx = ctx.as_gles();
+                    let mut elements = Vec::new();
+                    self.render_inner(
+                        ctx.r(),
+                        Point::new(0., 0.),
+                        xray_pos,
+                        focus_ring,
+                        &mut |elem| elements.push(elem),
+                    );
+                    match alpha.offscreen.render(ctx.renderer, scale, &elements) {
+                        Ok((elem, _sync, data)) => {
+                            let offset = elem.offset();
+                            let elem = elem.with_alpha(tile_alpha).with_offset(location + offset);
+
+                            self.window().set_offscreen_data(Some(data));
+                            push(elem.into());
+                            pushed = true;
+                        }
+                        Err(err) => {
+                            warn!("error rendering tile to offscreen for alpha animation: {err:?}");
+                        }
                     }
                 }
             }

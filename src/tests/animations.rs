@@ -11,6 +11,7 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use super::client::ClientId;
 use super::*;
 use crate::niri::Niri;
+use crate::render_helpers::shaders::{self, ProgramType, Shaders};
 
 fn format_tiles(niri: &Niri) -> String {
     let mut buf = String::new();
@@ -76,13 +77,44 @@ fn set_up() -> Fixture {
     let mut config = Config::default();
     config.layout.gaps = 0.0;
     config.animations.window_resize.anim.kind = LINEAR;
-    config.animations.window_movement.0.kind = LINEAR;
+    config.animations.window_movement.anim.kind = LINEAR;
 
     let mut f = Fixture::with_config(config);
     f.niri_state().backend.headless().add_renderer().unwrap();
     f.add_output(1, (1920, 1080));
 
     f
+}
+
+#[test]
+fn custom_movement_shader_compiles() {
+    let mut f = set_up();
+    let compiled = f
+        .niri_state()
+        .backend
+        .with_primary_renderer(|renderer| {
+            shaders::set_custom_movement_program(
+                renderer,
+                Some(
+                    r#"
+                        vec4 movement_color(vec3 coords_geo, vec3 size_geo) {
+                            vec2 movement = niri_move_from + niri_move_offset;
+                            float progress = niri_progress + niri_clamped_progress;
+                            vec3 coords_tex = niri_geo_to_tex * coords_geo;
+                            vec4 color = texture2D(niri_tex, coords_tex.st);
+                            return color + vec4(movement / size_geo.xy, progress, niri_random_seed) * 0.0;
+                        }
+                    "#,
+                ),
+            );
+
+            Shaders::get(renderer)
+                .program(ProgramType::Movement)
+                .is_some()
+        })
+        .unwrap();
+
+    assert!(compiled);
 }
 
 fn set_up_two_in_column() -> (Fixture, ClientId, WlSurface, WlSurface) {
@@ -202,7 +234,7 @@ fn closing_window_stays_in_place_during_left_refill() {
 
     let mut config = Config::default();
     config.layout.gaps = 0.;
-    config.animations.window_movement.0.kind = MOVEMENT;
+    config.animations.window_movement.anim.kind = MOVEMENT;
     config.animations.window_close.anim.kind = CLOSE;
     config.debug.disable_transactions = true;
 

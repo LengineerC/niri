@@ -82,6 +82,7 @@ pub mod focus_ring;
 pub mod grid_overview;
 pub mod insert_hint_element;
 pub mod monitor;
+pub mod moving_window;
 pub mod opening_window;
 pub mod scrolling;
 pub mod shadow;
@@ -3736,7 +3737,7 @@ impl<W: LayoutElement> Layout<W> {
                     move_.tile.animate_alpha(
                         INTERACTIVE_MOVE_ALPHA,
                         1.,
-                        self.options.animations.window_movement.0,
+                        self.options.animations.window_movement.anim,
                     );
 
                     // Unlock the view on the workspaces.
@@ -3748,7 +3749,7 @@ impl<W: LayoutElement> Layout<W> {
                     move_.tile.animate_alpha(
                         1.,
                         INTERACTIVE_MOVE_ALPHA,
-                        self.options.animations.window_movement.0,
+                        self.options.animations.window_movement.anim,
                     );
                     move_.tile.hold_alpha_animation_after_done();
                 }
@@ -4781,7 +4782,7 @@ impl<W: LayoutElement> Layout<W> {
                     tile.animate_alpha(
                         1.,
                         INTERACTIVE_MOVE_ALPHA,
-                        self.options.animations.window_movement.0,
+                        self.options.animations.window_movement.anim,
                     );
                     tile.hold_alpha_animation_after_done();
                 }
@@ -4940,7 +4941,7 @@ impl<W: LayoutElement> Layout<W> {
             move_.tile.animate_alpha(
                 INTERACTIVE_MOVE_ALPHA,
                 1.,
-                self.options.animations.window_movement.0,
+                self.options.animations.window_movement.anim,
             );
         }
 

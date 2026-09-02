@@ -247,7 +247,7 @@ impl<W: LayoutElement> GridOverview<W> {
                 0.,
                 1.,
                 0.,
-                self.options.animations.window_movement.0,
+                self.options.animations.window_movement.anim,
             ));
         }
         self.layout = new_layout;

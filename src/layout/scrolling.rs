@@ -13,6 +13,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::grid_overview::GridItem;
 use super::monitor::InsertPosition;
+use super::moving_window::MovementShaderParams;
 use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
 use super::workspace::{InteractiveResize, ResolvedSize};
@@ -1235,11 +1236,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             if target_column.active_tile_idx == tile_idx {
                 // Fade out the previously active tile.
                 let tile = &mut target_column.tiles[prev_active_tile_idx];
-                tile.animate_alpha(1., 0., self.options.animations.window_movement.0);
+                tile.animate_alpha(1., 0., self.options.animations.window_movement.anim);
             } else {
                 // Fade out when adding into a tabbed column into the background.
                 let tile = &mut target_column.tiles[tile_idx];
-                tile.animate_alpha(1., 0., self.options.animations.window_movement.0);
+                tile.animate_alpha(1., 0., self.options.animations.window_movement.anim);
             }
         }
 
@@ -1311,7 +1312,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         // Animate movement of other columns.
         let offset = self.column_x(idx + 1) - self.column_x(idx);
-        let config = anim_config.unwrap_or(self.options.animations.window_movement.0);
+        let config = anim_config.unwrap_or(self.options.animations.window_movement.anim);
         if self.active_column_idx <= idx {
             for col in &mut self.columns[idx + 1..] {
                 col.animate_move_x_from_with_config(-offset, config);
@@ -1380,7 +1381,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let column = &mut self.columns[column_idx];
         let prev_width = self.data[column_idx].width;
 
-        let movement_config = anim_config.unwrap_or(self.options.animations.window_movement.0);
+        let movement_config = anim_config.unwrap_or(self.options.animations.window_movement.anim);
 
         // Animate movement of other tiles.
         // FIXME: tiles can move by X too, in a centered or resizing layout with one window smaller
@@ -1507,7 +1508,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let focus_left_refill = anim_config.is_none() && self.should_focus_left_refill(column_idx);
 
         // Animate movement of the other columns.
-        let movement_config = anim_config.unwrap_or(self.options.animations.window_movement.0);
+        let movement_config = anim_config.unwrap_or(self.options.animations.window_movement.anim);
         let offset = self.column_x(column_idx + 1) - self.column_x(column_idx);
         if self.active_column_idx <= column_idx {
             for col in &mut self.columns[column_idx + 1..] {
@@ -2271,7 +2272,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             }
         }
 
-        self.activate_column_with_anim_config(new_idx, self.options.animations.window_movement.0);
+        self.activate_column_with_anim_config(
+            new_idx,
+            self.options.animations.window_movement.anim,
+        );
     }
 
     /// Minimizes or restores a window.
@@ -2505,7 +2509,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 source_col_idx,
                 0,
                 Transaction::new(),
-                Some(self.options.animations.window_movement.0),
+                Some(self.options.animations.window_movement.anim),
             );
             self.add_tile_to_column(target_column_idx, None, tile, source_tile_was_active);
 
@@ -2531,7 +2535,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 source_tile_was_active,
                 removed.width,
                 removed.is_full_width,
-                Some(self.options.animations.window_movement.0),
+                Some(self.options.animations.window_movement.anim),
             );
 
             if source_tile_was_active {
@@ -2608,7 +2612,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 source_col_idx,
                 0,
                 Transaction::new(),
-                Some(self.options.animations.window_movement.0),
+                Some(self.options.animations.window_movement.anim),
             );
             self.add_tile_to_column(target_column_idx, None, tile, source_tile_was_active);
 
@@ -2632,7 +2636,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 source_tile_was_active,
                 removed.width,
                 removed.is_full_width,
-                Some(self.options.animations.window_movement.0),
+                Some(self.options.animations.window_movement.anim),
             );
 
             offset.x += if self.active_column_idx <= target_column_idx {
@@ -2719,7 +2723,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             false,
             removed.width,
             removed.is_full_width,
-            Some(self.options.animations.window_movement.0),
+            Some(self.options.animations.window_movement.anim),
         );
 
         offset.x += cur_x - self.column_x(target_col_idx);
@@ -2787,7 +2791,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             source_column_idx,
             source_tile_idx,
             transaction.clone(),
-            Some(self.options.animations.window_movement.0),
+            Some(self.options.animations.window_movement.anim),
         );
 
         {
@@ -3695,6 +3699,8 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 continue;
             }
 
+            let column_movement = col.movement_shader_params();
+
             // Draw the tab indicator on top.
             {
                 let pos = col_pos.to_physical_precise_round(scale).to_logical(scale);
@@ -3724,9 +3730,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 }
 
                 let xray_pos = xray_pos.offset(tile_pos);
-                tile.render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
-                    push(elem.into())
-                });
+                tile.render_with_movement(
+                    ctx.r(),
+                    tile_pos,
+                    xray_pos,
+                    focus_ring,
+                    column_movement,
+                    &mut |elem| push(elem.into()),
+                );
             }
         }
     }
@@ -4830,7 +4841,7 @@ impl<W: LayoutElement> Column<W> {
             // Usually new columns are created together with window movement actions. For new
             // windows, we handle that in start_open_animation().
             rv.tab_indicator
-                .start_open_animation(rv.clock.clone(), rv.options.animations.window_movement.0);
+                .start_open_animation(rv.clock.clone(), rv.options.animations.window_movement.anim);
         }
 
         rv
@@ -5049,8 +5060,41 @@ impl<W: LayoutElement> Column<W> {
         offset
     }
 
+    fn movement_shader_params(&self) -> Option<MovementShaderParams> {
+        let mut move_from = Point::from((0., 0.));
+        let mut move_offset = Point::from((0., 0.));
+        let mut progress: Option<f64> = None;
+        let mut clamped_progress: Option<f64> = None;
+
+        if let Some(move_) = &self.move_x_animation {
+            let value = move_.anim.value();
+            move_from.x = move_.from;
+            move_offset.x = move_.from * value;
+            progress = Some(1. - value);
+            clamped_progress = Some(1. - move_.anim.clamped_value());
+        }
+
+        if let Some(move_) = &self.move_y_animation {
+            let value = move_.anim.value();
+            move_from.y = move_.from;
+            move_offset.y = move_.from * value;
+            let y_progress = 1. - value;
+            let y_clamped_progress = 1. - move_.anim.clamped_value();
+            progress = Some(progress.map_or(y_progress, |x| x.min(y_progress)));
+            clamped_progress =
+                Some(clamped_progress.map_or(y_clamped_progress, |x| x.min(y_clamped_progress)));
+        }
+
+        Some(MovementShaderParams {
+            move_from,
+            move_offset,
+            progress: progress?,
+            clamped_progress: clamped_progress?.clamp(0., 1.),
+        })
+    }
+
     pub fn animate_move_from(&mut self, from: Point<f64, Logical>) {
-        self.animate_move_from_with_config(from, self.options.animations.window_movement.0);
+        self.animate_move_from_with_config(from, self.options.animations.window_movement.anim);
     }
 
     pub fn animate_move_from_with_config(
@@ -5065,7 +5109,7 @@ impl<W: LayoutElement> Column<W> {
     pub fn animate_move_x_from(&mut self, from_x_offset: f64) {
         self.animate_move_x_from_with_config(
             from_x_offset,
-            self.options.animations.window_movement.0,
+            self.options.animations.window_movement.anim,
         );
     }
 
@@ -5074,6 +5118,10 @@ impl<W: LayoutElement> Column<W> {
         from_x_offset: f64,
         config: niri_config::Animation,
     ) {
+        for tile in &mut self.tiles {
+            tile.restart_movement_shader();
+        }
+
         let (current_offset, current_between) =
             self.move_x_animation.as_ref().map_or((0., false), |move_| {
                 (move_.from * move_.anim.value(), move_.is_between_workspaces)
@@ -5090,7 +5138,7 @@ impl<W: LayoutElement> Column<W> {
     pub fn animate_move_y_from(&mut self, from_y_offset: f64) {
         self.animate_move_y_from_with_config(
             from_y_offset,
-            self.options.animations.window_movement.0,
+            self.options.animations.window_movement.anim,
         );
     }
 
@@ -5099,6 +5147,10 @@ impl<W: LayoutElement> Column<W> {
         from_y_offset: f64,
         config: niri_config::Animation,
     ) {
+        for tile in &mut self.tiles {
+            tile.restart_movement_shader();
+        }
+
         let (current_offset, current_between) =
             self.move_y_animation.as_ref().map_or((0., false), |move_| {
                 (move_.from * move_.anim.value(), move_.is_between_workspaces)
@@ -6162,7 +6214,7 @@ impl<W: LayoutElement> Column<W> {
                 } else {
                     (0., 1.)
                 };
-                tile.animate_alpha(from, to, self.options.animations.window_movement.0);
+                tile.animate_alpha(from, to, self.options.animations.window_movement.anim);
             }
         }
 
@@ -6170,7 +6222,7 @@ impl<W: LayoutElement> Column<W> {
         if display == ColumnDisplay::Tabbed {
             self.tab_indicator.start_open_animation(
                 self.clock.clone(),
-                self.options.animations.window_movement.0,
+                self.options.animations.window_movement.anim,
             );
         }
 

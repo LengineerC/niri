@@ -1672,6 +1672,16 @@ impl State {
             shaders_changed = true;
         }
 
+        if config.animations.window_movement.custom_shader
+            != old_config.animations.window_movement.custom_shader
+        {
+            let src = config.animations.window_movement.custom_shader.as_deref();
+            self.backend.with_primary_renderer(|renderer| {
+                shaders::set_custom_movement_program(renderer, src);
+            });
+            shaders_changed = true;
+        }
+
         if config.cursor.hide_after_inactive_ms != old_config.cursor.hide_after_inactive_ms {
             cursor_inactivity_timeout_changed = true;
         }

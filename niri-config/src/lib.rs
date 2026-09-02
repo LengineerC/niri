@@ -1001,6 +1001,10 @@ mod tests {
                     curve "ease-out-expo"
                 }
 
+                window-movement {
+                    custom-shader "movement"
+                }
+
                 window-open { off; }
 
                 window-close {
@@ -1732,8 +1736,8 @@ mod tests {
                         ),
                     },
                 ),
-                window_movement: WindowMovementAnim(
-                    Animation {
+                window_movement: WindowMovementAnim {
+                    anim: Animation {
                         off: false,
                         kind: Spring(
                             SpringParams {
@@ -1743,7 +1747,10 @@ mod tests {
                             },
                         ),
                     },
-                ),
+                    custom_shader: Some(
+                        "movement",
+                    ),
+                },
                 window_resize: WindowResizeAnim {
                     anim: Animation {
                         off: false,

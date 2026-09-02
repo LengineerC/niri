@@ -331,6 +331,32 @@ animations {
 }
 ```
 
+##### `custom-shader`
+
+You can write a custom shader for drawing a window while it is moving.
+
+See [this example shader](./examples/movement_custom_shader.frag) for the complete interface and an example wobble effect.
+
+If a custom shader fails to compile, niri prints a warning and keeps the previous successfully compiled shader (or disables the movement shader if there was none).
+When running niri as a systemd service, you can see the warnings in the journal: `journalctl -ef /usr/bin/niri`
+
+> [!WARNING]
+>
+> Custom shaders do not have a backwards compatibility guarantee.
+
+```kdl
+animations {
+    window-movement {
+        custom-shader r"
+            vec4 movement_color(vec3 coords_geo, vec3 size_geo) {
+                vec3 coords_tex = niri_geo_to_tex * coords_geo;
+                return texture2D(niri_tex, coords_tex.st);
+            }
+        "
+    }
+}
+```
+
 #### `window-resize`
 
 <sup>Since: 0.1.5</sup>

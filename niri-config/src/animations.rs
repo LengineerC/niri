@@ -229,19 +229,25 @@ impl Default for HorizontalViewMovementAnim {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WindowMovementAnim(pub Animation);
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowMovementAnim {
+    pub anim: Animation,
+    pub custom_shader: Option<String>,
+}
 
 impl Default for WindowMovementAnim {
     fn default() -> Self {
-        Self(Animation {
-            off: false,
-            kind: Kind::Spring(SpringParams {
-                damping_ratio: 1.,
-                stiffness: 800,
-                epsilon: 0.0001,
-            }),
-        })
+        Self {
+            anim: Animation {
+                off: false,
+                kind: Kind::Spring(SpringParams {
+                    damping_ratio: 1.,
+                    stiffness: 800,
+                    epsilon: 0.0001,
+                }),
+            },
+            custom_shader: None,
+        }
     }
 }
 
@@ -447,10 +453,21 @@ where
         node: &knuffel::ast::SpannedNode<S>,
         ctx: &mut knuffel::decode::Context<S>,
     ) -> Result<Self, DecodeError<S>> {
-        let default = Self::default().0;
-        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
-            Ok(false)
-        })?))
+        let default = Self::default().anim;
+        let mut custom_shader = None;
+        let anim = Animation::decode_node(node, ctx, default, |child, ctx| {
+            if &**child.node_name == "custom-shader" {
+                custom_shader = parse_arg_node("custom-shader", child, ctx)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })?;
+
+        Ok(Self {
+            anim,
+            custom_shader,
+        })
     }
 }
 

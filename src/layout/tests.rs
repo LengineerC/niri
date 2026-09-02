@@ -6992,7 +6992,7 @@ fn removing_active_middle_column_uses_window_movement_for_left_refill() {
         duration_ms: 100,
         curve: Curve::EaseOutExpo,
     });
-    options.animations.window_movement.0.kind = Kind::Easing(EasingParams {
+    options.animations.window_movement.anim.kind = Kind::Easing(EasingParams {
         duration_ms: 1000,
         curve: Curve::Linear,
     });

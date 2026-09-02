@@ -36,7 +36,7 @@ fn make_options() -> Options {
         ..Options::default()
     };
     options.animations.window_resize.anim.kind = LINEAR;
-    options.animations.window_movement.0.kind = LINEAR;
+    options.animations.window_movement.anim.kind = LINEAR;
 
     options
 }
@@ -859,7 +859,7 @@ fn height_resize_cancel_with_stationary_second_window() {
     ];
     let mut options = make_options();
     // Window movement will happen instantly.
-    options.animations.window_movement.0.off = true;
+    options.animations.window_movement.anim.off = true;
     let mut layout = check_ops_with_options(options, ops);
 
     // The resize is in progress.
