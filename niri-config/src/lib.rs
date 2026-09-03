@@ -752,6 +752,32 @@ mod tests {
     }
 
     #[test]
+    fn grid_overview_animation_parses() {
+        let config = Config::parse_mem(
+            r#"
+            animations {
+                grid-overview-open-close {
+                    duration-ms 325
+                    curve "ease-out-cubic"
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.animations.grid_overview_open_close.0,
+            Animation {
+                off: false,
+                kind: animations::Kind::Easing(animations::EasingParams {
+                    duration_ms: 325,
+                    curve: animations::Curve::EaseOutCubic,
+                }),
+            }
+        );
+    }
+
+    #[test]
     fn screen_cast_picker_colors_parse() {
         let config = Config::parse_mem(
             r##"

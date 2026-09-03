@@ -68,6 +68,10 @@ animations {
         spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
     }
 
+    grid-overview-open-close {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+
     magnifier {
         spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
     }
@@ -489,6 +493,23 @@ The open/close zoom animation of the [Overview](./Overview.md).
 ```kdl
 animations {
     overview-open-close {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+}
+```
+
+#### `grid-overview-open-close`
+
+The open/close animation of the [Grid Overview](./Grid-Overview.md).
+It controls windows moving between their normal layout positions and grid cells, including the
+fade animation of minimized-window previews.
+
+Like `overview-open-close`, it supports spring or easing animation parameters and `off`.
+Custom shaders are not supported.
+
+```kdl
+animations {
+    grid-overview-open-close {
         spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
     }
 }
