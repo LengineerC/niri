@@ -275,6 +275,7 @@ impl Niri {
             KeyboardFocus::ScreenshotUi => ID_SCREENSHOT_UI,
             KeyboardFocus::ExitConfirmDialog => ID_EXIT_CONFIRM_DIALOG,
             KeyboardFocus::Overview => ID_OVERVIEW,
+            KeyboardFocus::GridOverview => ID_OVERVIEW,
             KeyboardFocus::Mru => ID_MRU,
             _ => ID_ROOT,
         }

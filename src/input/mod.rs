@@ -5501,7 +5501,7 @@ fn grid_should_close_on_escape(
     is_grid_overview_open: bool,
     keyboard_focus: &KeyboardFocus,
 ) -> bool {
-    is_grid_overview_open && keyboard_focus.is_layout()
+    is_grid_overview_open && (keyboard_focus.is_layout() || keyboard_focus.is_grid_overview())
 }
 
 fn grid_should_confirm_on_return(
@@ -5511,7 +5511,9 @@ fn grid_should_confirm_on_return(
 ) -> bool {
     is_grid_overview_open
         && has_grid_focus
-        && (keyboard_focus.is_layout() || keyboard_focus.is_overview())
+        && (keyboard_focus.is_layout()
+            || keyboard_focus.is_overview()
+            || keyboard_focus.is_grid_overview())
 }
 
 fn grid_should_handle_workspace_wheel(
@@ -5551,7 +5553,11 @@ fn hardcoded_grid_or_overview_bind(
     is_grid_overview_open: bool,
     keyboard_focus: &KeyboardFocus,
 ) -> Option<Bind> {
-    if is_grid_overview_open && (keyboard_focus.is_layout() || keyboard_focus.is_overview()) {
+    if is_grid_overview_open
+        && (keyboard_focus.is_layout()
+            || keyboard_focus.is_overview()
+            || keyboard_focus.is_grid_overview())
+    {
         let bind = hardcoded_grid_overview_bind(raw, mods);
         if bind.is_none() && keyboard_focus.is_overview() {
             hardcoded_overview_bind(raw, mods)
@@ -6240,8 +6246,10 @@ mod tests {
     #[test]
     fn grid_return_confirm_handles_overview_focus() {
         let layout_focus = KeyboardFocus::Layout { surface: None };
+        let grid_focus = KeyboardFocus::GridOverview;
 
         assert!(grid_should_confirm_on_return(true, &layout_focus, true));
+        assert!(grid_should_confirm_on_return(true, &grid_focus, true));
         assert!(grid_should_confirm_on_return(
             true,
             &KeyboardFocus::Overview,
@@ -6264,8 +6272,18 @@ mod tests {
         ));
 
         assert!(grid_should_close_on_escape(true, &layout_focus));
+        assert!(grid_should_close_on_escape(true, &grid_focus));
         assert!(!grid_should_close_on_escape(true, &KeyboardFocus::Overview));
         assert!(!grid_should_close_on_escape(false, &layout_focus));
+    }
+
+    #[test]
+    fn grid_focus_does_not_target_a_client_surface() {
+        let focus = KeyboardFocus::GridOverview;
+
+        assert!(focus.surface().is_none());
+        assert!(!focus.is_layout());
+        assert!(focus.is_grid_overview());
     }
 
     #[test]
@@ -6373,6 +6391,7 @@ mod tests {
     fn grid_without_a_matching_bind_falls_back_to_overview() {
         let no_mods = ModifiersState::default();
         let overview_focus = KeyboardFocus::Overview;
+        let grid_focus = KeyboardFocus::GridOverview;
 
         for keysym in [Keysym::Return, Keysym::Escape] {
             assert!(matches!(
@@ -6394,6 +6413,17 @@ mod tests {
             &KeyboardFocus::Layout { surface: None },
         )
         .is_none());
+
+        // Grid-only focus has no client surface and must not borrow Overview's Return/Escape
+        // actions. Those keys are handled explicitly by the Grid code above.
+        for keysym in [Keysym::Return, Keysym::Escape] {
+            assert!(hardcoded_grid_or_overview_bind(keysym, no_mods, true, &grid_focus).is_none());
+        }
+        assert!(matches!(
+            hardcoded_grid_or_overview_bind(Keysym::h, no_mods, true, &grid_focus)
+                .map(|bind| bind.action),
+            Some(Action::FocusColumnLeft)
+        ));
     }
 
     #[test]

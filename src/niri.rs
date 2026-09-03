@@ -565,6 +565,7 @@ pub enum KeyboardFocus {
     ScreenCastPicker,
     ExitConfirmDialog,
     Overview,
+    GridOverview,
     Mru,
 }
 
@@ -716,6 +717,7 @@ impl KeyboardFocus {
             KeyboardFocus::ScreenCastPicker => None,
             KeyboardFocus::ExitConfirmDialog => None,
             KeyboardFocus::Overview => None,
+            KeyboardFocus::GridOverview => None,
             KeyboardFocus::Mru => None,
         }
     }
@@ -730,6 +732,7 @@ impl KeyboardFocus {
             KeyboardFocus::ScreenCastPicker => None,
             KeyboardFocus::ExitConfirmDialog => None,
             KeyboardFocus::Overview => None,
+            KeyboardFocus::GridOverview => None,
             KeyboardFocus::Mru => None,
         }
     }
@@ -740,6 +743,10 @@ impl KeyboardFocus {
 
     pub fn is_overview(&self) -> bool {
         matches!(self, KeyboardFocus::Overview)
+    }
+
+    pub fn is_grid_overview(&self) -> bool {
+        matches!(self, KeyboardFocus::GridOverview)
     }
 }
 
@@ -1296,6 +1303,7 @@ impl State {
                 |layer| excl_focus_on_layer(layer).or_else(|| on_d_focus_on_layer(layer));
 
             let is_overview_open = self.niri.layout.is_overview_open();
+            let is_grid_overview_open = self.niri.layout.is_grid_overview_open();
 
             let mut surface = grab_on_layer(Layer::Overlay);
             // FIXME: we shouldn't prioritize the top layer grabs over regular overlay input or a
@@ -1318,8 +1326,13 @@ impl State {
             } else {
                 surface = surface.or_else(|| focus_on_layer(Layer::Top));
 
-                if is_overview_open {
-                    surface = Some(surface.unwrap_or(KeyboardFocus::Overview));
+                if is_overview_open || is_grid_overview_open {
+                    let overview_focus = if is_overview_open {
+                        KeyboardFocus::Overview
+                    } else {
+                        KeyboardFocus::GridOverview
+                    };
+                    surface = Some(surface.unwrap_or(overview_focus));
                 }
 
                 surface = surface.or_else(|| on_d_focus_on_layer(Layer::Bottom));
@@ -5134,6 +5147,7 @@ impl Niri {
             KeyboardFocus::ScreenCastPicker => true,
             KeyboardFocus::ExitConfirmDialog => true,
             KeyboardFocus::Overview => true,
+            KeyboardFocus::GridOverview => true,
             KeyboardFocus::Mru => true,
         };
 
