@@ -1,7 +1,7 @@
 # Maintainer: LengineerC <lengineerc@outlook.com>
 
 pkgname=niri
-pkgver=26.4.0.r2866.gcb3e6f1f
+pkgver=26.4.0.r2973.g6d559519
 pkgrel=1
 pkgdesc='A scrollable-tiling Wayland compositor (LengineerC custom build)'
 arch=(x86_64)
