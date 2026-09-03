@@ -2083,7 +2083,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .next_interactive_column(self.active_column_idx)
             .or_else(|| self.prev_interactive_column(self.active_column_idx));
         if let Some(idx) = idx {
-            self.activate_column_with_anim_config(idx, self.options.animations.window_movement.0);
+            self.activate_column_with_anim_config(
+                idx,
+                self.options.animations.window_movement.anim,
+            );
         }
     }
 
@@ -2669,7 +2672,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let Some(source_column_idx) = self.next_interactive_column(target_column_idx) else {
             return;
         };
-        let Some(source_tile_idx) = self.columns[source_column_idx].visible_tile_indices().next()
+        let Some(source_tile_idx) = self.columns[source_column_idx]
+            .visible_tile_indices()
+            .next()
         else {
             return;
         };

@@ -5603,7 +5603,7 @@ fn grid_cross_workspace_move_uses_workspace_switch_animation_for_fly_in() {
         duration_ms: 1000,
         curve: Curve::Linear,
     });
-    options.animations.window_movement.0.kind = Kind::Easing(EasingParams {
+    options.animations.window_movement.anim.kind = Kind::Easing(EasingParams {
         duration_ms: 1,
         curve: Curve::Linear,
     });

@@ -8408,7 +8408,10 @@ mod screen_cast_picker_preview_tests {
     #[test]
     fn picker_is_visible_to_outputs_and_normal_captures_only() {
         assert!(should_render_screen_cast_picker(true, RenderIntent::Normal));
-        assert!(should_render_screen_cast_picker(false, RenderIntent::Normal));
+        assert!(should_render_screen_cast_picker(
+            false,
+            RenderIntent::Normal
+        ));
         assert!(!should_render_screen_cast_picker(
             false,
             RenderIntent::PickerPreview
