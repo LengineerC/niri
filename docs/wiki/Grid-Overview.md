@@ -20,6 +20,8 @@ You can set the gap between cells like this:
 ```kdl
 grid-overview {
     gap 16
+    // Optionally make only the horizontal gap wider.
+    horizontal-gap 24
 }
 ```
 

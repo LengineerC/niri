@@ -674,6 +674,22 @@ mod tests {
     }
 
     #[test]
+    fn grid_overview_horizontal_gap_parses() {
+        let config = Config::parse_mem(
+            r#"
+            grid-overview {
+                gap 16
+                horizontal-gap 24
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.grid_overview.gap, 16.);
+        assert_eq!(config.grid_overview.horizontal_gap, Some(24.));
+    }
+
+    #[test]
     fn grid_overview_padding_parses_per_edge_values() {
         let config = Config::parse_mem(
             r#"
@@ -1927,6 +1943,7 @@ mod tests {
             },
             grid_overview: GridOverview {
                 gap: 16.0,
+                horizontal_gap: None,
                 padding: GridOverviewPadding {
                     left: 80.0,
                     right: 80.0,

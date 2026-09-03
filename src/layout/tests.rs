@@ -3765,10 +3765,51 @@ fn grid_overview_packs_visual_gap_with_fullscreen() {
     let visual_gap = entries[1].0.x - (entries[0].0.x + entries[0].1.w);
 
     assert!(
-        (visual_gap - go.layout.gap).abs() < 0.0001,
+        (visual_gap - go.layout.horizontal_gap).abs() < 0.0001,
         "grid visual gap should match configured gap: visual_gap={visual_gap}, configured={}",
-        go.layout.gap
+        go.layout.horizontal_gap
     );
+}
+
+#[test]
+fn grid_overview_horizontal_gap_does_not_change_vertical_gap() {
+    let options = Options {
+        grid_overview: niri_config::GridOverview {
+            gap: 12.,
+            horizontal_gap: Some(28.),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut ops = vec![Op::AddOutput(1)];
+    for id in 1..=4 {
+        ops.push(Op::AddWindow {
+            params: TestWindowParams::new(id),
+        });
+        ops.push(Op::Communicate(id));
+    }
+    ops.push(Op::ToggleGridOverview);
+
+    let layout = check_ops_with_options(options, ops);
+    let go = layout
+        .active_workspace()
+        .and_then(|ws| ws.grid_overview())
+        .unwrap();
+    let info_at = |row, col| {
+        go.layout
+            .entries
+            .iter()
+            .find_map(|(_, info)| (info.row == row && info.col == col).then_some(info))
+            .unwrap()
+    };
+    let top_left = info_at(0, 0);
+    let top_right = info_at(0, 1);
+    let bottom_left = info_at(1, 0);
+    let horizontal_gap = top_right.target_pos.x - (top_left.target_pos.x + top_left.target_size.w);
+    let vertical_gap = bottom_left.target_pos.y - (top_left.target_pos.y + top_left.target_size.h);
+
+    assert!((horizontal_gap - 28.).abs() < 0.0001);
+    assert!((vertical_gap - 12.).abs() < 0.0001);
 }
 
 #[test]

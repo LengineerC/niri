@@ -327,6 +327,18 @@ grid-overview {
 }
 ```
 
+#### `horizontal-gap`
+
+Override the horizontal gap between grid cells without changing the vertical gap.
+When unset, it uses the value of `gap`.
+
+```kdl
+grid-overview {
+    gap 16
+    horizontal-gap 24
+}
+```
+
 #### `padding`
 
 Set the padding around the grid.

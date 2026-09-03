@@ -3770,7 +3770,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
 
         let (item, info, visual_pos, visual_scale, source_size, dist_sq) = nearest?;
-        let max_distance = go.layout.gap.max(100.);
+        let max_distance = go.layout.horizontal_gap.max(100.);
         if dist_sq > max_distance * max_distance {
             return None;
         }
@@ -3912,7 +3912,10 @@ impl<W: LayoutElement> Workspace<W> {
             (None, Some(right_rect)) => {
                 let width = (right_rect.size.w * 0.25).clamp(30., 300.);
                 Some(Rectangle::new(
-                    Point::from((right_rect.loc.x - go.layout.gap - width, right_rect.loc.y)),
+                    Point::from((
+                        right_rect.loc.x - go.layout.horizontal_gap - width,
+                        right_rect.loc.y,
+                    )),
                     Size::from((width, right_rect.size.h)),
                 ))
             }
@@ -3920,7 +3923,7 @@ impl<W: LayoutElement> Workspace<W> {
                 let width = (left_rect.size.w * 0.25).clamp(30., 300.);
                 Some(Rectangle::new(
                     Point::from((
-                        left_rect.loc.x + left_rect.size.w + go.layout.gap,
+                        left_rect.loc.x + left_rect.size.w + go.layout.horizontal_gap,
                         left_rect.loc.y,
                     )),
                     Size::from((width, left_rect.size.h)),
@@ -3929,9 +3932,9 @@ impl<W: LayoutElement> Workspace<W> {
             (None, None) => {
                 let width = (current_rect.size.w * 0.25).clamp(30., 300.);
                 let x = if insert_left {
-                    current_rect.loc.x - go.layout.gap - width
+                    current_rect.loc.x - go.layout.horizontal_gap - width
                 } else {
-                    current_rect.loc.x + current_rect.size.w + go.layout.gap
+                    current_rect.loc.x + current_rect.size.w + go.layout.horizontal_gap
                 };
                 Some(Rectangle::new(
                     Point::from((x, current_rect.loc.y)),

@@ -904,7 +904,7 @@ impl<W: LayoutElement> GridOverview<W> {
 pub struct GridLayout<W: LayoutElement> {
     pub cols: usize,
     pub rows: usize,
-    pub gap: f64,
+    pub horizontal_gap: f64,
     pub entries: Vec<(GridItem<W>, GridEntryInfo)>,
 }
 
@@ -916,7 +916,7 @@ impl<W: LayoutElement> Clone for GridLayout<W> {
         Self {
             cols: self.cols,
             rows: self.rows,
-            gap: self.gap,
+            horizontal_gap: self.horizontal_gap,
             entries: self.entries.clone(),
         }
     }
@@ -927,7 +927,7 @@ impl<W: LayoutElement> GridLayout<W> {
         Self {
             cols: 0,
             rows: 0,
-            gap: 0.,
+            horizontal_gap: 0.,
             entries: Vec::new(),
         }
     }
@@ -942,7 +942,8 @@ impl<W: LayoutElement> GridLayout<W> {
             return Self::empty();
         }
 
-        let gap = config.gap;
+        let horizontal_gap = config.horizontal_gap.unwrap_or(config.gap);
+        let vertical_gap = config.gap;
         let padding = config.padding;
 
         let content_w = (area.size.w - padding.left - padding.right).max(1.);
@@ -956,8 +957,8 @@ impl<W: LayoutElement> GridLayout<W> {
             rows = n.div_ceil(cols);
         }
 
-        let cell_w = (content_w - gap * (cols as f64 - 1.)) / cols as f64;
-        let cell_h = (content_h - gap * (rows as f64 - 1.)) / rows as f64;
+        let cell_w = (content_w - horizontal_gap * (cols as f64 - 1.)) / cols as f64;
+        let cell_h = (content_h - vertical_gap * (rows as f64 - 1.)) / rows as f64;
         let cell_ar = cell_w / cell_h;
 
         let tiling_scale = entries
@@ -1011,12 +1012,12 @@ impl<W: LayoutElement> GridLayout<W> {
             .zip(&row_counts)
             .filter(|(_, count)| **count > 0)
             .map(|(content_width, count)| {
-                let gap_width = gap * count.saturating_sub(1) as f64;
+                let gap_width = horizontal_gap * count.saturating_sub(1) as f64;
                 ((content_w - gap_width).max(1.) / content_width.max(1.)).max(0.)
             })
             .reduce(f64::min)
             .unwrap_or(1.);
-        let row_gap_height = gap * rows.saturating_sub(1) as f64;
+        let row_gap_height = vertical_gap * rows.saturating_sub(1) as f64;
         let fill_scale_for_height = ((content_h - row_gap_height).max(1.)
             / row_heights.iter().sum::<f64>().max(1.))
         .max(0.);
@@ -1043,13 +1044,13 @@ impl<W: LayoutElement> GridLayout<W> {
             row_heights[*row] = row_heights[*row].max(target_size.h);
         }
 
-        let packed_h = row_heights.iter().sum::<f64>() + gap * (rows - 1) as f64;
+        let packed_h = row_heights.iter().sum::<f64>() + vertical_gap * (rows - 1) as f64;
         let start_y = area.loc.y + padding.top + (content_h - packed_h) / 2.;
         let mut row_offsets = Vec::with_capacity(rows);
         let mut next_y = 0.;
         for height in &row_heights {
             row_offsets.push(next_y);
-            next_y += height + gap;
+            next_y += height + vertical_gap;
         }
 
         let mut row_next_x = vec![0.; rows];
@@ -1057,13 +1058,13 @@ impl<W: LayoutElement> GridLayout<W> {
 
         for ((item, _), (row, col, target_size, target_scale)) in entries.iter().zip(entry_sizes) {
             let row_width =
-                row_content_widths[row] + gap * row_counts[row].saturating_sub(1) as f64;
+                row_content_widths[row] + horizontal_gap * row_counts[row].saturating_sub(1) as f64;
             let row_start_x = area.loc.x + padding.left + (content_w - row_width) / 2.;
             let target_pos = Point::from((
                 row_start_x + row_next_x[row],
                 start_y + row_offsets[row] + (row_heights[row] - target_size.h) / 2.,
             ));
-            row_next_x[row] += target_size.w + gap;
+            row_next_x[row] += target_size.w + horizontal_gap;
 
             out_entries.push((
                 item.clone(),
@@ -1080,7 +1081,7 @@ impl<W: LayoutElement> GridLayout<W> {
         Self {
             cols,
             rows,
-            gap,
+            horizontal_gap,
             entries: out_entries,
         }
     }

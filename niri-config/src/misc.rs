@@ -262,6 +262,7 @@ impl MergeWith<OverviewPart> for Overview {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GridOverview {
     pub gap: f64,
+    pub horizontal_gap: Option<f64>,
     pub padding: GridOverviewPadding,
     pub min_scale: f64,
     pub focused_column_scale: f64,
@@ -298,6 +299,7 @@ impl Default for GridOverview {
     fn default() -> Self {
         Self {
             gap: 16.,
+            horizontal_gap: None,
             padding: GridOverviewPadding::default(),
             min_scale: 0.08,
             focused_column_scale: 1.04,
@@ -430,6 +432,8 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for GridOverviewPaddingPa
 pub struct GridOverviewPart {
     #[knuffel(child, unwrap(argument))]
     pub gap: Option<FloatOrInt<0, { i32::MAX }>>,
+    #[knuffel(child, unwrap(argument))]
+    pub horizontal_gap: Option<FloatOrInt<0, { i32::MAX }>>,
     #[knuffel(child)]
     pub padding: Option<GridOverviewPaddingPart>,
     #[knuffel(child, unwrap(argument))]
@@ -446,6 +450,9 @@ impl MergeWith<GridOverviewPart> for GridOverview {
     fn merge_with(&mut self, part: &GridOverviewPart) {
         if let Some(gap) = &part.gap {
             self.gap = gap.0;
+        }
+        if let Some(horizontal_gap) = &part.horizontal_gap {
+            self.horizontal_gap = Some(horizontal_gap.0);
         }
         if let Some(padding) = &part.padding {
             padding.merge_into(&mut self.padding);
