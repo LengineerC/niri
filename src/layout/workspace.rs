@@ -8,8 +8,10 @@ use niri_config::{
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
-use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::utils::CommitCounter;
+use smithay::backend::renderer::Color32F;
 use smithay::desktop::{layer_map_for_output, Window};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -112,6 +114,9 @@ pub struct Workspace<W: LayoutElement> {
     /// This workspace's background.
     background_buffer: SolidColorBuffer,
 
+    /// Stable render-element ID for floating-window indicators in the grid overview.
+    floating_grid_indicator_id: Id,
+
     /// Clock for driving animations.
     pub(super) clock: Clock,
 
@@ -177,6 +182,7 @@ niri_render_elements! {
         Floating = FloatingSpaceRenderElement<R>,
         GridTile =
             RelocateRenderElement<OverviewRescaleRenderElement<ScrollingSpaceRenderElement<R>>>,
+        FloatingGridIndicator = SolidColorRenderElement,
     }
 }
 
@@ -295,6 +301,7 @@ impl<W: LayoutElement> Workspace<W> {
             working_area,
             shadow: Shadow::new(shadow_config),
             background_buffer: SolidColorBuffer::new(view_size, options.layout.background_color),
+            floating_grid_indicator_id: Id::new(),
             output: Some(output),
             clock,
             base_options,
@@ -361,6 +368,7 @@ impl<W: LayoutElement> Workspace<W> {
             working_area,
             shadow: Shadow::new(shadow_config),
             background_buffer: SolidColorBuffer::new(view_size, options.layout.background_color),
+            floating_grid_indicator_id: Id::new(),
             clock,
             base_options,
             options,
@@ -2902,6 +2910,91 @@ impl<W: LayoutElement> Workspace<W> {
                     tab_indicator.render(ctx.renderer, tab_indicator_rel_pos, &mut push_grid_elem);
                 };
 
+            let render_floating_grid_indicator =
+                |push: &mut dyn FnMut(WorkspaceRenderElement<R>),
+                 tile_visual_pos: Point<f64, Logical>,
+                 tile_visual_size: Size<f64, Logical>,
+                 info: &GridEntryInfo| {
+                    const FRAME_WIDTH: f64 = 15.;
+                    const FRAME_HEIGHT: f64 = 11.;
+                    const FRAME_OFFSET_X: f64 = 5.;
+                    const FRAME_OFFSET_Y: f64 = 4.;
+                    const STROKE: f64 = 1.5;
+                    const SHADOW_OFFSET: f64 = 1.;
+                    const MARGIN: f64 = 10.;
+                    const SEGMENTS_PER_FRAME: usize = 8;
+                    const SEGMENTS_PER_INDICATOR: usize = SEGMENTS_PER_FRAME * 2;
+
+                    let indicator_size: Size<f64, Logical> = Size::from((
+                        FRAME_WIDTH + FRAME_OFFSET_X + SHADOW_OFFSET,
+                        FRAME_HEIGHT + FRAME_OFFSET_Y + SHADOW_OFFSET,
+                    ));
+                    if tile_visual_size.w < indicator_size.w + MARGIN * 2.
+                        || tile_visual_size.h < indicator_size.h + MARGIN * 2.
+                    {
+                        return;
+                    }
+
+                    let origin = tile_visual_pos
+                        + Point::from((tile_visual_size.w - indicator_size.w - MARGIN, MARGIN));
+                    let alpha = go.progress_value().clamp(0., 1.) as f32;
+                    let commit = CommitCounter::from((alpha * 4096.).round() as usize);
+                    let cell = info.row.wrapping_mul(layout.cols).wrapping_add(info.col);
+                    let namespace_base = cell.wrapping_mul(SEGMENTS_PER_INDICATOR);
+
+                    // Render elements are queued top-to-bottom. Draw the front rectangle first,
+                    // followed by the rear rectangle, then the window tile below both.
+                    for (frame_idx, frame_offset) in [
+                        Point::from((FRAME_OFFSET_X, FRAME_OFFSET_Y)),
+                        Point::from((0., 0.)),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let frame_origin = origin + frame_offset;
+                        let segments = [
+                            Rectangle::new(frame_origin, Size::from((FRAME_WIDTH, STROKE))),
+                            Rectangle::new(
+                                frame_origin + Point::from((0., FRAME_HEIGHT - STROKE)),
+                                Size::from((FRAME_WIDTH, STROKE)),
+                            ),
+                            Rectangle::new(
+                                frame_origin + Point::from((0., STROKE)),
+                                Size::from((STROKE, FRAME_HEIGHT - STROKE * 2.)),
+                            ),
+                            Rectangle::new(
+                                frame_origin + Point::from((FRAME_WIDTH - STROKE, STROKE)),
+                                Size::from((STROKE, FRAME_HEIGHT - STROKE * 2.)),
+                            ),
+                        ];
+
+                        for (shadow, color) in [
+                            (false, Color32F::from([1., 1., 1., 0.95 * alpha])),
+                            (true, Color32F::from([0., 0., 0., 0.7 * alpha])),
+                        ] {
+                            let layer_offset = if shadow {
+                                Point::from((SHADOW_OFFSET, SHADOW_OFFSET))
+                            } else {
+                                Point::from((0., 0.))
+                            };
+                            for (segment_idx, segment) in segments.iter().enumerate() {
+                                let namespace = namespace_base
+                                    .wrapping_add(frame_idx * SEGMENTS_PER_FRAME)
+                                    .wrapping_add(usize::from(shadow) * segments.len())
+                                    .wrapping_add(segment_idx);
+                                let element = SolidColorRenderElement::new(
+                                    self.floating_grid_indicator_id.namespaced(namespace),
+                                    Rectangle::new(segment.loc + layer_offset, segment.size),
+                                    commit,
+                                    color,
+                                    Kind::Unspecified,
+                                );
+                                push(element.into());
+                            }
+                        }
+                    }
+                };
+
             let tab_is_active = |col_idx: usize, window_id: &W::Id| {
                 let active_idx = self.scrolling.column_active_tile_idx(col_idx);
                 self.scrolling
@@ -3098,6 +3191,13 @@ impl<W: LayoutElement> Workspace<W> {
 
                         let (tile_visual_pos, tile_visual_scale) =
                             go.window_visual_transform(window_id, visual_pos, visual_scale);
+
+                        render_floating_grid_indicator(
+                            push,
+                            tile_visual_pos,
+                            tile.tile_size().upscale(tile_visual_scale),
+                            info,
+                        );
 
                         render_tile(
                             ctx,
