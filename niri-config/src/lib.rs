@@ -726,6 +726,20 @@ mod tests {
     }
 
     #[test]
+    fn grid_overview_show_floating_windows_parses() {
+        let config = Config::parse_mem(
+            r#"
+            grid-overview {
+                show-floating-windows false
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(!config.grid_overview.show_floating_windows);
+    }
+
+    #[test]
     fn screen_cast_picker_animation_parses() {
         let config = Config::parse_mem(
             r#"
@@ -1978,6 +1992,7 @@ mod tests {
                 },
                 min_scale: 0.08,
                 focused_column_scale: 1.04,
+                show_floating_windows: true,
                 grid_all_monitors: true,
                 default_mod_action: true,
             },

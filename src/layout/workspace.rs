@@ -114,8 +114,8 @@ pub struct Workspace<W: LayoutElement> {
     /// This workspace's background.
     background_buffer: SolidColorBuffer,
 
-    /// Stable render-element ID for floating-window indicators in the grid overview.
-    floating_grid_indicator_id: Id,
+    /// Stable render-element ID for floating-window backplates in the grid overview.
+    floating_grid_backplate_id: Id,
 
     /// Clock for driving animations.
     pub(super) clock: Clock,
@@ -182,7 +182,7 @@ niri_render_elements! {
         Floating = FloatingSpaceRenderElement<R>,
         GridTile =
             RelocateRenderElement<OverviewRescaleRenderElement<ScrollingSpaceRenderElement<R>>>,
-        FloatingGridIndicator = SolidColorRenderElement,
+        FloatingGridBackplate = SolidColorRenderElement,
     }
 }
 
@@ -301,7 +301,7 @@ impl<W: LayoutElement> Workspace<W> {
             working_area,
             shadow: Shadow::new(shadow_config),
             background_buffer: SolidColorBuffer::new(view_size, options.layout.background_color),
-            floating_grid_indicator_id: Id::new(),
+            floating_grid_backplate_id: Id::new(),
             output: Some(output),
             clock,
             base_options,
@@ -368,7 +368,7 @@ impl<W: LayoutElement> Workspace<W> {
             working_area,
             shadow: Shadow::new(shadow_config),
             background_buffer: SolidColorBuffer::new(view_size, options.layout.background_color),
-            floating_grid_indicator_id: Id::new(),
+            floating_grid_backplate_id: Id::new(),
             clock,
             base_options,
             options,
@@ -1067,25 +1067,29 @@ impl<W: LayoutElement> Workspace<W> {
 
     fn grid_overview_items(&self) -> Vec<(GridItem<W>, Size<f64, Logical>)> {
         let mut items = self.scrolling.grid_overview_items();
-        items.extend(
-            self.floating
-                .tiles()
-                .filter(|tile| !Self::tile_ignores_grid_overview(tile))
-                .map(|tile| {
-                    (
-                        GridItem::Floating {
-                            window_id: tile.window().id().clone(),
-                        },
-                        tile.tile_size(),
-                    )
-                }),
-        );
+        if self.options.grid_overview.show_floating_windows {
+            items.extend(
+                self.floating
+                    .tiles()
+                    .filter(|tile| !Self::tile_ignores_grid_overview(tile))
+                    .map(|tile| {
+                        (
+                            GridItem::Floating {
+                                window_id: tile.window().id().clone(),
+                            },
+                            tile.tile_size(),
+                        )
+                    }),
+            );
+        }
         items
     }
 
     fn grid_item_for_window(&self, id: &W::Id) -> Option<GridItem<W>> {
         if let Some(tile) = self.floating.tiles().find(|tile| tile.window().id() == id) {
-            if Self::tile_ignores_grid_overview(tile) {
+            if !self.options.grid_overview.show_floating_windows
+                || Self::tile_ignores_grid_overview(tile)
+            {
                 return None;
             }
 
@@ -1102,7 +1106,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn active_ignored_floating_window_in_grid(&self) -> Option<&W> {
-        if !self.is_grid_overview_open() {
+        if !self.is_grid_overview_open() || !self.options.grid_overview.show_floating_windows {
             return None;
         }
 
@@ -1385,6 +1389,8 @@ impl<W: LayoutElement> Workspace<W> {
                 .with_merged_layout(self.layout_config.as_ref())
                 .adjusted_for_scale(scale),
         );
+        let floating_grid_visibility_changed = self.options.grid_overview.show_floating_windows
+            != options.grid_overview.show_floating_windows;
 
         self.scrolling.update_config(
             self.view_size,
@@ -1409,6 +1415,15 @@ impl<W: LayoutElement> Workspace<W> {
 
         self.base_options = base_options;
         self.options = options;
+
+        if floating_grid_visibility_changed && self.is_grid_overview_open() {
+            if self.grid_overview_items().is_empty() {
+                self.close_grid_overview();
+            } else {
+                self.recompute_grid_overview_layout(true);
+                self.sync_grid_focus_to_active_window();
+            }
+        }
     }
 
     pub fn update_layout_config(&mut self, layout_config: Option<niri_config::LayoutPart>) {
@@ -2798,6 +2813,7 @@ impl<W: LayoutElement> Workspace<W> {
 
         if matches!(render_pass, GridRenderPass::All | GridRenderPass::Focused)
             && self.is_floating_visible()
+            && self.options.grid_overview.show_floating_windows
         {
             let active_floating_id = (focus_ring && self.floating_is_active())
                 .then(|| self.floating.active_window())
@@ -2910,89 +2926,64 @@ impl<W: LayoutElement> Workspace<W> {
                     tab_indicator.render(ctx.renderer, tab_indicator_rel_pos, &mut push_grid_elem);
                 };
 
-            let render_floating_grid_indicator =
+            let render_floating_grid_backplate =
                 |push: &mut dyn FnMut(WorkspaceRenderElement<R>),
                  tile_visual_pos: Point<f64, Logical>,
                  tile_visual_size: Size<f64, Logical>,
                  info: &GridEntryInfo| {
-                    const FRAME_WIDTH: f64 = 15.;
-                    const FRAME_HEIGHT: f64 = 11.;
-                    const FRAME_OFFSET_X: f64 = 5.;
-                    const FRAME_OFFSET_Y: f64 = 4.;
-                    const STROKE: f64 = 1.5;
-                    const SHADOW_OFFSET: f64 = 1.;
-                    const MARGIN: f64 = 10.;
-                    const SEGMENTS_PER_FRAME: usize = 8;
-                    const SEGMENTS_PER_INDICATOR: usize = SEGMENTS_PER_FRAME * 2;
+                    const OFFSET: f64 = 7.;
+                    const BORDER_WIDTH: f64 = 1.5;
+                    const ELEMENTS_PER_BACKPLATE: usize = 5;
 
-                    let indicator_size: Size<f64, Logical> = Size::from((
-                        FRAME_WIDTH + FRAME_OFFSET_X + SHADOW_OFFSET,
-                        FRAME_HEIGHT + FRAME_OFFSET_Y + SHADOW_OFFSET,
-                    ));
-                    if tile_visual_size.w < indicator_size.w + MARGIN * 2.
-                        || tile_visual_size.h < indicator_size.h + MARGIN * 2.
-                    {
-                        return;
-                    }
-
-                    let origin = tile_visual_pos
-                        + Point::from((tile_visual_size.w - indicator_size.w - MARGIN, MARGIN));
+                    let backplate = Rectangle::new(
+                        tile_visual_pos + Point::from((OFFSET, OFFSET)),
+                        tile_visual_size,
+                    );
                     let alpha = go.progress_value().clamp(0., 1.) as f32;
                     let commit = CommitCounter::from((alpha * 4096.).round() as usize);
                     let cell = info.row.wrapping_mul(layout.cols).wrapping_add(info.col);
-                    let namespace_base = cell.wrapping_mul(SEGMENTS_PER_INDICATOR);
+                    let namespace_base = cell.wrapping_mul(ELEMENTS_PER_BACKPLATE);
 
-                    // Render elements are queued top-to-bottom. Draw the front rectangle first,
-                    // followed by the rear rectangle, then the window tile below both.
-                    for (frame_idx, frame_offset) in [
-                        Point::from((FRAME_OFFSET_X, FRAME_OFFSET_Y)),
-                        Point::from((0., 0.)),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        let frame_origin = origin + frame_offset;
-                        let segments = [
-                            Rectangle::new(frame_origin, Size::from((FRAME_WIDTH, STROKE))),
-                            Rectangle::new(
-                                frame_origin + Point::from((0., FRAME_HEIGHT - STROKE)),
-                                Size::from((FRAME_WIDTH, STROKE)),
-                            ),
-                            Rectangle::new(
-                                frame_origin + Point::from((0., STROKE)),
-                                Size::from((STROKE, FRAME_HEIGHT - STROKE * 2.)),
-                            ),
-                            Rectangle::new(
-                                frame_origin + Point::from((FRAME_WIDTH - STROKE, STROKE)),
-                                Size::from((STROKE, FRAME_HEIGHT - STROKE * 2.)),
-                            ),
-                        ];
-
-                        for (shadow, color) in [
-                            (false, Color32F::from([1., 1., 1., 0.95 * alpha])),
-                            (true, Color32F::from([0., 0., 0., 0.7 * alpha])),
-                        ] {
-                            let layer_offset = if shadow {
-                                Point::from((SHADOW_OFFSET, SHADOW_OFFSET))
-                            } else {
-                                Point::from((0., 0.))
-                            };
-                            for (segment_idx, segment) in segments.iter().enumerate() {
-                                let namespace = namespace_base
-                                    .wrapping_add(frame_idx * SEGMENTS_PER_FRAME)
-                                    .wrapping_add(usize::from(shadow) * segments.len())
-                                    .wrapping_add(segment_idx);
-                                let element = SolidColorRenderElement::new(
-                                    self.floating_grid_indicator_id.namespaced(namespace),
-                                    Rectangle::new(segment.loc + layer_offset, segment.size),
-                                    commit,
-                                    color,
-                                    Kind::Unspecified,
-                                );
-                                push(element.into());
-                            }
-                        }
+                    // Render elements are queued top-to-bottom. Put the outline above the fill;
+                    // the caller queues the window tile above this entire backplate.
+                    let border_color = Color32F::from([1., 1., 1., 0.32 * alpha]);
+                    let borders = [
+                        Rectangle::new(backplate.loc, Size::from((backplate.size.w, BORDER_WIDTH))),
+                        Rectangle::new(
+                            backplate.loc + Point::from((0., backplate.size.h - BORDER_WIDTH)),
+                            Size::from((backplate.size.w, BORDER_WIDTH)),
+                        ),
+                        Rectangle::new(
+                            backplate.loc + Point::from((0., BORDER_WIDTH)),
+                            Size::from((BORDER_WIDTH, backplate.size.h - BORDER_WIDTH * 2.)),
+                        ),
+                        Rectangle::new(
+                            backplate.loc
+                                + Point::from((backplate.size.w - BORDER_WIDTH, BORDER_WIDTH)),
+                            Size::from((BORDER_WIDTH, backplate.size.h - BORDER_WIDTH * 2.)),
+                        ),
+                    ];
+                    for (idx, geometry) in borders.into_iter().enumerate() {
+                        let element = SolidColorRenderElement::new(
+                            self.floating_grid_backplate_id
+                                .namespaced(namespace_base.wrapping_add(idx)),
+                            geometry,
+                            commit,
+                            border_color,
+                            Kind::Unspecified,
+                        );
+                        push(element.into());
                     }
+
+                    let fill = SolidColorRenderElement::new(
+                        self.floating_grid_backplate_id
+                            .namespaced(namespace_base.wrapping_add(ELEMENTS_PER_BACKPLATE - 1)),
+                        backplate,
+                        commit,
+                        Color32F::from([0.08, 0.08, 0.1, 0.88 * alpha]),
+                        Kind::Unspecified,
+                    );
+                    push(fill.into());
                 };
 
             let tab_is_active = |col_idx: usize, window_id: &W::Id| {
@@ -3181,6 +3172,10 @@ impl<W: LayoutElement> Workspace<W> {
                         }
                     }
                     GridItem::Floating { window_id } => {
+                        if !self.options.grid_overview.show_floating_windows {
+                            return;
+                        }
+
                         let Some((tile, _)) = self
                             .floating
                             .tiles_with_render_positions()
@@ -3191,13 +3186,6 @@ impl<W: LayoutElement> Workspace<W> {
 
                         let (tile_visual_pos, tile_visual_scale) =
                             go.window_visual_transform(window_id, visual_pos, visual_scale);
-
-                        render_floating_grid_indicator(
-                            push,
-                            tile_visual_pos,
-                            tile.tile_size().upscale(tile_visual_scale),
-                            info,
-                        );
 
                         render_tile(
                             ctx,
@@ -3210,6 +3198,13 @@ impl<W: LayoutElement> Workspace<W> {
                             false,
                             false,
                             !tile.window().is_minimized(),
+                        );
+
+                        render_floating_grid_backplate(
+                            push,
+                            tile_visual_pos,
+                            tile.tile_size().upscale(tile_visual_scale),
+                            info,
                         );
                     }
                 }
@@ -3347,7 +3342,7 @@ impl<W: LayoutElement> Workspace<W> {
             GridRenderPass::All | GridRenderPass::NonFocused
         ) {
             let view_rect = Rectangle::new(Point::from((0., 0.)), self.view_size);
-            if self.is_floating_visible() {
+            if self.is_floating_visible() && self.options.grid_overview.show_floating_windows {
                 for closing in self.floating.closing_windows() {
                     let elem = closing.render(ctx.as_gles(), view_rect, Scale::from(scale));
                     let elem: FloatingSpaceRenderElement<R> = elem.into();
@@ -3363,7 +3358,7 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn ignored_floating_window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
-        if !self.is_floating_visible() {
+        if !self.is_floating_visible() || !self.options.grid_overview.show_floating_windows {
             return None;
         }
 

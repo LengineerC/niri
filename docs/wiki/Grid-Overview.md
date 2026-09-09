@@ -51,3 +51,11 @@ grid-overview {
     focused-column-scale 1.08
 }
 ```
+
+To hide floating windows from the Grid Overview, use `show-floating-windows`:
+
+```kdl
+grid-overview {
+    show-floating-windows false
+}
+```

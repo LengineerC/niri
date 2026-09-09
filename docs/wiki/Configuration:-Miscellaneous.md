@@ -372,6 +372,20 @@ grid-overview {
 }
 ```
 
+#### `show-floating-windows`
+
+Whether to show floating windows in the Grid Overview. The default is `true`.
+
+When set to `false`, floating windows are hidden while the Grid Overview is open and are excluded
+from grid navigation. This differs from the `ignore-grid-overview` window rule, which keeps matched
+floating windows visible in their normal positions.
+
+```kdl
+grid-overview {
+    show-floating-windows false
+}
+```
+
 #### `default-mod-action`
 
 <sup>Since: 26.04 (fork)</sup>

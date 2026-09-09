@@ -4439,6 +4439,54 @@ fn grid_includes_floating_windows_without_ignore_rule() {
 }
 
 #[test]
+fn grid_can_hide_all_floating_windows() {
+    let options = Options {
+        grid_overview: niri_config::GridOverview {
+            show_floating_windows: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut floating = TestWindowParams::new(2);
+    floating.is_floating = true;
+
+    let layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::AddWindow { params: floating },
+            Op::FocusWindow(1),
+            Op::ToggleGridOverview,
+        ],
+    );
+
+    assert!(layout.window_is_in_open_grid_overview(&1));
+    assert!(!layout.window_is_in_open_grid_overview(&2));
+
+    let ws = layout.active_workspace().unwrap();
+    assert!(ws
+        .grid_overview()
+        .unwrap()
+        .layout
+        .entries
+        .iter()
+        .all(|(item, _)| !matches!(item, super::grid_overview::GridItem::Floating { .. })));
+    let hit_pos = ws
+        .tiles_with_render_positions()
+        .find_map(|(tile, pos, _)| {
+            (tile.window().id() == &2).then(|| {
+                let size = tile.tile_size();
+                pos + Point::from((size.w / 2., size.h / 2.))
+            })
+        })
+        .unwrap();
+    assert!(ws.ignored_floating_window_under(hit_pos).is_none());
+}
+
+#[test]
 fn grid_closing_focused_first_column_focuses_right() {
     let mut layout = three_column_grid_layout(1);
     check_ops_on_layout(&mut layout, [Op::ToggleGridOverview]);
