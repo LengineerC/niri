@@ -1,17 +1,17 @@
+use std::cell::RefCell;
 use std::cmp::max;
 use std::rc::Rc;
 use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
 use niri_config::{
-    CenterFocusedColumn, CornerRadius, OutputName, PresetSize, Workspace as WorkspaceConfig,
+    CenterFocusedColumn, Color, CornerRadius, GradientInterpolation, OutputName, PresetSize,
+    Workspace as WorkspaceConfig,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
-use smithay::backend::renderer::element::{Id, Kind};
+use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::utils::CommitCounter;
-use smithay::backend::renderer::Color32F;
 use smithay::desktop::{layer_map_for_output, Window};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -36,6 +36,7 @@ use super::{
 use crate::animation::{Animation, Clock};
 use crate::layout::RenderLayer;
 use crate::niri_render_elements;
+use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::overview_rescale::OverviewRescaleRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
@@ -114,8 +115,8 @@ pub struct Workspace<W: LayoutElement> {
     /// This workspace's background.
     background_buffer: SolidColorBuffer,
 
-    /// Stable render-element ID for floating-window backplates in the grid overview.
-    floating_grid_backplate_id: Id,
+    /// Cached render elements for floating-window backplates in the grid overview.
+    floating_grid_backplates: RefCell<Vec<BorderRenderElement>>,
 
     /// Clock for driving animations.
     pub(super) clock: Clock,
@@ -182,7 +183,7 @@ niri_render_elements! {
         Floating = FloatingSpaceRenderElement<R>,
         GridTile =
             RelocateRenderElement<OverviewRescaleRenderElement<ScrollingSpaceRenderElement<R>>>,
-        FloatingGridBackplate = SolidColorRenderElement,
+        FloatingGridBackplate = BorderRenderElement,
     }
 }
 
@@ -301,7 +302,7 @@ impl<W: LayoutElement> Workspace<W> {
             working_area,
             shadow: Shadow::new(shadow_config),
             background_buffer: SolidColorBuffer::new(view_size, options.layout.background_color),
-            floating_grid_backplate_id: Id::new(),
+            floating_grid_backplates: RefCell::new(Vec::new()),
             output: Some(output),
             clock,
             base_options,
@@ -368,7 +369,7 @@ impl<W: LayoutElement> Workspace<W> {
             working_area,
             shadow: Shadow::new(shadow_config),
             background_buffer: SolidColorBuffer::new(view_size, options.layout.background_color),
-            floating_grid_backplate_id: Id::new(),
+            floating_grid_backplates: RefCell::new(Vec::new()),
             clock,
             base_options,
             options,
@@ -1439,6 +1440,9 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.update_shaders();
         self.floating.update_shaders();
         self.shadow.update_shaders();
+        for element in self.floating_grid_backplates.get_mut() {
+            element.damage_all();
+        }
     }
 
     pub fn windows(&self) -> impl Iterator<Item = &W> + '_ {
@@ -2930,59 +2934,71 @@ impl<W: LayoutElement> Workspace<W> {
                 |push: &mut dyn FnMut(WorkspaceRenderElement<R>),
                  tile_visual_pos: Point<f64, Logical>,
                  tile_visual_size: Size<f64, Logical>,
+                 corner_radius: CornerRadius,
                  info: &GridEntryInfo| {
-                    const OFFSET: f64 = 7.;
-                    const BORDER_WIDTH: f64 = 1.5;
-                    const ELEMENTS_PER_BACKPLATE: usize = 5;
+                    const OFFSET: f64 = 5.;
+                    const BORDER_WIDTH: f32 = 1.25;
+                    const ELEMENTS_PER_BACKPLATE: usize = 2;
 
                     let backplate = Rectangle::new(
-                        tile_visual_pos + Point::from((OFFSET, OFFSET)),
+                        tile_visual_pos + Point::from((-OFFSET, OFFSET)),
                         tile_visual_size,
                     );
                     let alpha = go.progress_value().clamp(0., 1.) as f32;
-                    let commit = CommitCounter::from((alpha * 4096.).round() as usize);
                     let cell = info.row.wrapping_mul(layout.cols).wrapping_add(info.col);
                     let namespace_base = cell.wrapping_mul(ELEMENTS_PER_BACKPLATE);
+                    let geometry = Rectangle::from_size(backplate.size);
+                    let radius =
+                        corner_radius.fit_to(backplate.size.w as f32, backplate.size.h as f32);
+                    let scale = self.scale.fractional_scale() as f32;
+
+                    let (outline, fill) = {
+                        let mut elements = self.floating_grid_backplates.borrow_mut();
+                        elements.resize_with(
+                            namespace_base + ELEMENTS_PER_BACKPLATE,
+                            BorderRenderElement::empty,
+                        );
+
+                        let update =
+                            |element: &mut BorderRenderElement, color: Color, border_width: f32| {
+                                element.update(
+                                    backplate.size,
+                                    geometry,
+                                    GradientInterpolation::default(),
+                                    color,
+                                    color,
+                                    0.,
+                                    geometry,
+                                    border_width,
+                                    radius,
+                                    scale,
+                                    alpha,
+                                );
+                                let updated = std::mem::take(element).with_location(backplate.loc);
+                                *element = updated;
+                            };
+
+                        update(
+                            &mut elements[namespace_base],
+                            Color::from_array_unpremul([1., 1., 1., 0.2]),
+                            BORDER_WIDTH,
+                        );
+
+                        update(
+                            &mut elements[namespace_base + 1],
+                            Color::from_array_unpremul([0.08, 0.08, 0.1, 0.45]),
+                            0.,
+                        );
+
+                        (
+                            elements[namespace_base].clone(),
+                            elements[namespace_base + 1].clone(),
+                        )
+                    };
 
                     // Render elements are queued top-to-bottom. Put the outline above the fill;
                     // the caller queues the window tile above this entire backplate.
-                    let border_color = Color32F::from([1., 1., 1., 0.32 * alpha]);
-                    let borders = [
-                        Rectangle::new(backplate.loc, Size::from((backplate.size.w, BORDER_WIDTH))),
-                        Rectangle::new(
-                            backplate.loc + Point::from((0., backplate.size.h - BORDER_WIDTH)),
-                            Size::from((backplate.size.w, BORDER_WIDTH)),
-                        ),
-                        Rectangle::new(
-                            backplate.loc + Point::from((0., BORDER_WIDTH)),
-                            Size::from((BORDER_WIDTH, backplate.size.h - BORDER_WIDTH * 2.)),
-                        ),
-                        Rectangle::new(
-                            backplate.loc
-                                + Point::from((backplate.size.w - BORDER_WIDTH, BORDER_WIDTH)),
-                            Size::from((BORDER_WIDTH, backplate.size.h - BORDER_WIDTH * 2.)),
-                        ),
-                    ];
-                    for (idx, geometry) in borders.into_iter().enumerate() {
-                        let element = SolidColorRenderElement::new(
-                            self.floating_grid_backplate_id
-                                .namespaced(namespace_base.wrapping_add(idx)),
-                            geometry,
-                            commit,
-                            border_color,
-                            Kind::Unspecified,
-                        );
-                        push(element.into());
-                    }
-
-                    let fill = SolidColorRenderElement::new(
-                        self.floating_grid_backplate_id
-                            .namespaced(namespace_base.wrapping_add(ELEMENTS_PER_BACKPLATE - 1)),
-                        backplate,
-                        commit,
-                        Color32F::from([0.08, 0.08, 0.1, 0.88 * alpha]),
-                        Kind::Unspecified,
-                    );
+                    push(outline.into());
                     push(fill.into());
                 };
 
@@ -3204,6 +3220,10 @@ impl<W: LayoutElement> Workspace<W> {
                             push,
                             tile_visual_pos,
                             tile.tile_size().upscale(tile_visual_scale),
+                            tile.window()
+                                .geometry_corner_radius()
+                                .expanded_by(tile.effective_border_width().unwrap_or(0.) as f32)
+                                .scaled_by(tile_visual_scale as f32),
                             info,
                         );
                     }
