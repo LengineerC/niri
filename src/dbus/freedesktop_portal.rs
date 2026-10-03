@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Context as _;
 use futures_util::future::{select, Either};
 use futures_util::StreamExt;
-use zbus::fdo::{self, RequestNameFlags};
+use zbus::fdo;
 use zbus::message::Header;
 use zbus::names::{OwnedUniqueName, UniqueName};
 use zbus::object_server::SignalEmitter;
@@ -951,6 +951,7 @@ pub fn start(
     to_niri_cast: calloop::channel::Sender<ScreenCastToNiri>,
     to_niri_screenshot: calloop::channel::Sender<ScreenshotToNiri>,
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
+    monitor: bool,
 ) -> anyhow::Result<(zbus::blocking::Connection, PortalCastMap)> {
     let cast_paths = PortalCastMap::default();
     let shared = Arc::new(Shared {
@@ -963,15 +964,11 @@ pub fn start(
     });
 
     let conn = zbus::blocking::Connection::session()?;
-    let flags = RequestNameFlags::AllowReplacement
-        | RequestNameFlags::ReplaceExisting
-        | RequestNameFlags::DoNotQueue;
-
     conn.object_server()
         .at(PORTAL_PATH, ScreenCastBackend(shared.clone()))?;
     conn.object_server()
         .at(PORTAL_PATH, ScreenshotBackend(shared.clone()))?;
-    conn.request_name_with_flags(BUS_NAME, flags)?;
+    super::request_name(&conn, BUS_NAME, monitor)?;
 
     let async_conn = conn.inner().clone();
     let future = async move {
