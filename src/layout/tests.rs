@@ -4606,6 +4606,72 @@ fn grid_stays_open_on_workspace_switch() {
     assert!(layout.is_grid_overview_open());
 }
 
+#[test]
+fn grid_focus_ring_respects_active_monitor() {
+    for (floating, tabbed) in [(false, false), (false, true), (true, false)] {
+        let mut layout = Layout::default();
+        for id in [1, 2] {
+            let mut params = TestWindowParams::new(id);
+            params.is_floating = floating;
+            check_ops_on_layout(
+                &mut layout,
+                [
+                    Op::AddOutput(id),
+                    Op::FocusOutput(id),
+                    Op::AddWindow { params },
+                ],
+            );
+            if tabbed {
+                check_ops_on_layout(&mut layout, [Op::ToggleColumnTabbedDisplay]);
+            }
+        }
+
+        let assert_colors = |layout: &mut Layout<TestWindow>| {
+            layout.update_render_elements(None);
+            let MonitorSet::Normal {
+                monitors,
+                active_monitor_idx,
+                ..
+            } = &layout.monitor_set
+            else {
+                unreachable!();
+            };
+            for (idx, mon) in monitors.iter().enumerate() {
+                let tile = mon.workspaces[mon.active_workspace_idx]
+                    .tiles()
+                    .next()
+                    .unwrap();
+                let ring = tile.focus_ring();
+                let expected = if layout.is_active && idx == *active_monitor_idx {
+                    ring.config().active_color
+                } else {
+                    ring.config().inactive_color
+                };
+                assert_eq!(
+                    ring.rendered_color(),
+                    expected.into(),
+                    "floating={floating}, tabbed={tabbed}, monitor={idx}"
+                );
+            }
+        };
+
+        assert_colors(&mut layout);
+        check_ops_on_layout(&mut layout, [Op::ToggleGridOverview]);
+        assert_colors(&mut layout);
+        check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+        assert_colors(&mut layout);
+        check_ops_on_layout(&mut layout, [Op::FocusOutput(1)]);
+        assert_colors(&mut layout);
+        layout.is_active = false;
+        assert_colors(&mut layout);
+        layout.is_active = true;
+        check_ops_on_layout(&mut layout, [Op::ToggleGridOverview]);
+        assert_colors(&mut layout);
+        check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+        assert_colors(&mut layout);
+    }
+}
+
 fn three_column_grid_layout(active: usize) -> Layout<TestWindow> {
     check_ops([
         Op::AddOutput(1),

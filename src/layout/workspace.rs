@@ -1359,12 +1359,14 @@ impl<W: LayoutElement> Workspace<W> {
 
                     self.scrolling.update_grid_item_render_elements(
                         item,
-                        focused_window,
+                        // Each monitor keeps a grid selection, but only the active
+                        // monitor's selection uses the active decoration style.
+                        focused_window.filter(|_| is_active),
                         view_rect,
                     );
                     for tile in self.floating.tiles_mut() {
                         if tile.window().id() == item.window_id() {
-                            tile.update_render_elements(is_grid_focused, view_rect);
+                            tile.update_render_elements(is_active && is_grid_focused, view_rect);
                             break;
                         }
                     }

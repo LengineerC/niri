@@ -31,6 +31,11 @@ niri_render_elements! {
 }
 
 impl FocusRing {
+    #[cfg(test)]
+    pub(super) fn rendered_color(&self) -> smithay::backend::renderer::Color32F {
+        self.buffers[0].color()
+    }
+
     pub fn new(config: niri_config::FocusRing) -> Self {
         Self {
             buffers: Default::default(),
