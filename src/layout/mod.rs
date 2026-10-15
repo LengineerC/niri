@@ -388,6 +388,7 @@ pub struct Layout<W: LayoutElement> {
     overview_open: bool,
     /// The overview zoom progress.
     overview_progress: Option<OverviewProgress>,
+    bound_grid_gesture: Option<BoundGridGesture>,
     /// Configurable properties of the layout.
     options: Rc<Options>,
 }
@@ -587,6 +588,13 @@ pub(super) struct OverviewGesture {
     value: f64,
 }
 
+#[derive(Debug)]
+struct BoundGridGesture {
+    // Freeze the scope, even if focus or grid-all-monitors changes mid-gesture.
+    outputs: Vec<(Output, bool)>,
+    amount: f64,
+}
+
 /// Layer of windows to render.
 #[derive(Clone, Copy)]
 pub enum RenderLayer {
@@ -756,6 +764,7 @@ impl<W: LayoutElement> Layout<W> {
             update_render_elements_time: Duration::ZERO,
             overview_open: false,
             overview_progress: None,
+            bound_grid_gesture: None,
             options: Rc::new(options),
         }
     }
@@ -781,6 +790,7 @@ impl<W: LayoutElement> Layout<W> {
             update_render_elements_time: Duration::ZERO,
             overview_open: false,
             overview_progress: None,
+            bound_grid_gesture: None,
             options: opts,
         }
     }
@@ -4494,6 +4504,119 @@ impl<W: LayoutElement> Layout<W> {
         self.overview_progress = Some(OverviewProgress::Gesture(gesture));
 
         self.set_monitors_overview_state();
+    }
+
+    /// Begin a configured swipe/pinch transition. Unlike action dispatch this keeps the
+    /// layout at its current position until the input device supplies progress.
+    pub fn bound_view_gesture_begin(&mut self, grid: bool) {
+        if !grid {
+            self.overview_gesture_begin();
+            return;
+        }
+        let all = self.grid_all_monitors();
+        let MonitorSet::Normal {
+            monitors,
+            active_monitor_idx,
+            ..
+        } = &mut self.monitor_set
+        else {
+            return;
+        };
+        let mut outputs = Vec::new();
+        for (idx, mon) in monitors.iter_mut().enumerate() {
+            if !all && idx != *active_monitor_idx {
+                continue;
+            }
+            outputs.push((mon.output.clone(), mon.is_grid_overview_open()));
+            mon.set_grid_overview_open(true);
+            for ws in &mut mon.workspaces {
+                ws.prepare_grid_gesture();
+                if let Some(go) = &mut ws.grid_overview {
+                    let value = go.progress_value();
+                    go.progress = Some(OverviewProgress::Gesture(OverviewGesture {
+                        tracker: SwipeTracker::new(),
+                        start: value,
+                        value,
+                    }));
+                }
+            }
+        }
+        self.bound_grid_gesture = Some(BoundGridGesture {
+            outputs,
+            amount: 0.,
+        });
+    }
+
+    /// `amount` is absolute progress relative to the gesture's starting position.
+    pub fn bound_view_gesture_update(&mut self, grid: bool, amount: f64) {
+        if !amount.is_finite() {
+            return;
+        }
+        if grid {
+            if let Some(gesture) = &mut self.bound_grid_gesture {
+                gesture.amount = amount;
+            }
+            for ws in self.workspaces_mut() {
+                if let Some(go) = &mut ws.grid_overview {
+                    if let Some(OverviewProgress::Gesture(g)) = &mut go.progress {
+                        g.value = (g.start + amount).clamp(0., 1.);
+                    }
+                }
+            }
+        } else if let Some(OverviewProgress::Gesture(g)) = &mut self.overview_progress {
+            g.value = (g.start + amount).clamp(0., 1.);
+            self.set_monitors_overview_state();
+        }
+    }
+
+    pub fn bound_view_gesture_end(&mut self, grid: bool, cancelled: bool) {
+        if grid {
+            let Some(gesture) = self.bound_grid_gesture.take() else {
+                return;
+            };
+            let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set else {
+                return;
+            };
+            for (output, was_open) in gesture.outputs {
+                let Some(mon) = monitors.iter_mut().find(|mon| mon.output == output) else {
+                    continue;
+                };
+                let value = mon
+                    .workspaces
+                    .iter()
+                    .find_map(|ws| match ws.grid_overview.as_ref()?.progress.as_ref()? {
+                        OverviewProgress::Gesture(g) => Some(g.value),
+                        _ => None,
+                    })
+                    .unwrap_or(f64::from(was_open) + gesture.amount);
+                let open = if cancelled { was_open } else { value >= 0.5 };
+                mon.set_grid_overview_open(open);
+                for ws in &mut mon.workspaces {
+                    if let Some(go) = &mut ws.grid_overview {
+                        if let Some(OverviewProgress::Gesture(g)) = &go.progress {
+                            go.progress = Some(OverviewProgress::Animation(Animation::new(
+                                go.clock.clone(),
+                                g.value,
+                                f64::from(open),
+                                0.,
+                                go.options.animations.grid_overview_open_close.0,
+                            )));
+                        }
+                    }
+                }
+            }
+        } else if let Some(OverviewProgress::Gesture(g)) = &self.overview_progress {
+            let to = if cancelled { g.start } else { g.value }.round();
+            self.overview_open = to == 1.;
+            self.overview_progress = Some(OverviewProgress::Animation(Animation::new(
+                self.clock.clone(),
+                g.value,
+                to,
+                0.,
+                self.options.animations.overview_open_close.0,
+            )));
+            self.set_monitors_overview_state();
+        }
     }
 
     pub fn overview_gesture_update(&mut self, delta_y: f64, timestamp: Duration) -> Option<bool> {

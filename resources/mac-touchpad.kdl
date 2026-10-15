@@ -8,20 +8,22 @@ input {
 }
 
 gestures {
-    // Keep workspace switching interactive, using horizontal four-finger motion.
-    // niri's workspaces still animate vertically.
+    // Four fingers: vertical workspace switching, horizontal window focus.
     workspace-switch-fingers 4
-    workspace-switch-axis "horizontal"
+    workspace-switch-axis "vertical"
     view-scroll-fingers 0
     overview-fingers 0
     swipe-threshold 24
 
-    // Directional actions run once on release, after crossing the threshold.
-    swipe fingers=4 direction="up" { open-overview; }
-    swipe fingers=4 direction="down" { open-grid-overview; }
+    swipe fingers=4 direction="left" { focus-column-left; }
+    swipe fingers=4 direction="right" { focus-column-right; }
+    // View transitions follow the fingers, including reversing before release.
+    // In grid, spread to exit; in overview, pinch inward to exit.
+    pinch fingers=4 direction="in" { open-grid-overview; }
+    pinch fingers=4 direction="out" { open-overview; }
     // Grid shows the workspace's windows, not only the current application's windows.
 
-    // Alternatively, replace interactive horizontal switching with arbitrary actions:
-    // swipe fingers=4 direction="left" { focus-workspace-down; }
-    // swipe fingers=4 direction="right" { focus-workspace-up; }
+    // Mod + two-finger dragging resizes the window under the pointer.
+    // Remove old four-finger up/down swipe bindings from your config: they
+    // otherwise take precedence over workspace switching.
 }

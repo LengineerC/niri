@@ -1,7 +1,8 @@
 use smithay::backend::input::{
-    Device, DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GestureSwipeBeginEvent,
-    GestureSwipeEndEvent, GestureSwipeUpdateEvent, InputBackend, InputTime, KeyState,
-    KeyboardKeyEvent, Keycode, UnusedEvent,
+    Device, DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GesturePinchBeginEvent,
+    GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
+    GestureSwipeUpdateEvent, InputBackend, InputTime, KeyState, KeyboardKeyEvent, Keycode,
+    UnusedEvent,
 };
 use smithay::output::Output;
 
@@ -12,12 +13,54 @@ pub struct TestInputBackend;
 #[derive(PartialEq, Eq, Hash)]
 pub struct TestInputDevice;
 
+pub struct TestAxisEvent {
+    pub source: smithay::backend::input::AxisSource,
+    pub horizontal: Option<f64>,
+    pub vertical: Option<f64>,
+    pub inverted: bool,
+}
+
+impl Event<TestInputBackend> for TestAxisEvent {
+    fn time(&self) -> InputTime {
+        InputTime::now()
+    }
+    fn device(&self) -> TestInputDevice {
+        TestInputDevice
+    }
+}
+
+impl smithay::backend::input::PointerAxisEvent<TestInputBackend> for TestAxisEvent {
+    fn amount(&self, axis: smithay::backend::input::Axis) -> Option<f64> {
+        match axis {
+            smithay::backend::input::Axis::Horizontal => self.horizontal,
+            smithay::backend::input::Axis::Vertical => self.vertical,
+        }
+    }
+    fn amount_v120(&self, axis: smithay::backend::input::Axis) -> Option<f64> {
+        self.amount(axis)
+    }
+    fn source(&self) -> smithay::backend::input::AxisSource {
+        self.source
+    }
+    fn relative_direction(
+        &self,
+        _: smithay::backend::input::Axis,
+    ) -> smithay::backend::input::AxisRelativeDirection {
+        if self.inverted {
+            smithay::backend::input::AxisRelativeDirection::Inverted
+        } else {
+            smithay::backend::input::AxisRelativeDirection::Identical
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct TestSwipeEvent {
     pub fingers: u32,
     pub dx: f64,
     pub dy: f64,
     pub cancelled: bool,
+    pub scale: f64,
 }
 
 impl Event<TestInputBackend> for TestSwipeEvent {
@@ -42,6 +85,22 @@ impl GestureEndEvent<TestInputBackend> for TestSwipeEvent {
 }
 
 impl GestureSwipeBeginEvent<TestInputBackend> for TestSwipeEvent {}
+impl GesturePinchBeginEvent<TestInputBackend> for TestSwipeEvent {}
+impl GesturePinchEndEvent<TestInputBackend> for TestSwipeEvent {}
+impl GesturePinchUpdateEvent<TestInputBackend> for TestSwipeEvent {
+    fn delta_x(&self) -> f64 {
+        self.dx
+    }
+    fn delta_y(&self) -> f64 {
+        self.dy
+    }
+    fn scale(&self) -> f64 {
+        self.scale
+    }
+    fn rotation(&self) -> f64 {
+        0.
+    }
+}
 impl GestureSwipeEndEvent<TestInputBackend> for TestSwipeEvent {}
 impl GestureSwipeUpdateEvent<TestInputBackend> for TestSwipeEvent {
     fn delta_x(&self) -> f64 {
@@ -63,7 +122,7 @@ impl InputBackend for TestInputBackend {
     type Device = TestInputDevice;
 
     type KeyboardKeyEvent = TestKeyboardKeyEvent;
-    type PointerAxisEvent = UnusedEvent;
+    type PointerAxisEvent = TestAxisEvent;
     type PointerButtonEvent = UnusedEvent;
     type PointerMotionEvent = UnusedEvent;
     type PointerMotionAbsoluteEvent = UnusedEvent;
@@ -71,9 +130,9 @@ impl InputBackend for TestInputBackend {
     type GestureSwipeBeginEvent = TestSwipeEvent;
     type GestureSwipeUpdateEvent = TestSwipeEvent;
     type GestureSwipeEndEvent = TestSwipeEvent;
-    type GesturePinchBeginEvent = UnusedEvent;
-    type GesturePinchUpdateEvent = UnusedEvent;
-    type GesturePinchEndEvent = UnusedEvent;
+    type GesturePinchBeginEvent = TestSwipeEvent;
+    type GesturePinchUpdateEvent = TestSwipeEvent;
+    type GesturePinchEndEvent = TestSwipeEvent;
     type GestureHoldBeginEvent = UnusedEvent;
     type GestureHoldEndEvent = UnusedEvent;
 

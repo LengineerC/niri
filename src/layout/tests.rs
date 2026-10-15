@@ -3807,6 +3807,106 @@ fn grid_overview_preserves_fullscreen() {
 }
 
 #[test]
+fn bound_grid_gesture_progress_reverses_and_cancels() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ]);
+    layout.bound_view_gesture_begin(true);
+    layout.bound_view_gesture_update(true, 0.25);
+    let go = layout.active_workspace().unwrap().grid_overview().unwrap();
+    assert!((go.progress_value() - 0.25).abs() < 0.001);
+    assert!(go.is_animation());
+    let (item, info) = &go.layout.entries[0];
+    let (_, scale) = go.entry_visual_transform(item, info, (0., 0.).into());
+    let boost = go.entry_focus_boost(item, info);
+    assert!((scale - (1. + (info.target_scale - 1.) * 0.25) * boost).abs() < 0.001);
+    layout.bound_view_gesture_update(true, 0.1);
+    assert!(
+        (layout
+            .active_workspace()
+            .unwrap()
+            .grid_overview_progress()
+            .unwrap()
+            - 0.1)
+            .abs()
+            < 0.001
+    );
+    layout.bound_view_gesture_end(true, true);
+    assert!(!layout.is_grid_overview_open());
+}
+
+#[test]
+fn bound_overview_gesture_progress_reverses_and_finishes() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    layout.bound_view_gesture_begin(false);
+    layout.bound_view_gesture_update(false, 0.75);
+    assert_eq!(layout.overview_progress.as_ref().unwrap().value(), 0.75);
+    layout.bound_view_gesture_update(false, 0.2);
+    assert_eq!(layout.overview_progress.as_ref().unwrap().value(), 0.2);
+    layout.bound_view_gesture_end(false, false);
+    assert!(!layout.is_overview_open());
+    layout.bound_view_gesture_begin(false);
+    layout.bound_view_gesture_update(false, 0.9);
+    layout.bound_view_gesture_end(false, false);
+    assert!(layout.is_overview_open());
+}
+
+#[test]
+fn bound_grid_gesture_empty_output_cancellation_restores_state() {
+    let mut layout = check_ops([Op::AddOutput(1)]);
+    layout.bound_view_gesture_begin(true);
+    layout.bound_view_gesture_update(true, 0.8);
+    layout.bound_view_gesture_end(true, true);
+    assert!(!layout.is_grid_overview_open());
+    layout.bound_view_gesture_begin(true);
+    layout.bound_view_gesture_update(true, 0.8);
+    layout.bound_view_gesture_end(true, false);
+    assert!(layout.is_grid_overview_open());
+}
+
+#[test]
+fn bound_grid_reverse_gesture_scrubs_from_fully_open_and_closes() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ]);
+    layout.bound_view_gesture_begin(true);
+    layout.bound_view_gesture_update(true, 1.);
+    layout.bound_view_gesture_end(true, false);
+    layout.clock.set_complete_instantly(true);
+    layout.advance_animations();
+    layout.clock.set_complete_instantly(false);
+    layout.bound_view_gesture_begin(true);
+    layout.bound_view_gesture_update(true, -0.4);
+    let go = layout.active_workspace().unwrap().grid_overview().unwrap();
+    assert!((go.progress_value() - 0.6).abs() < 0.001);
+    let (item, info) = &go.layout.entries[0];
+    let (_, scale) = go.entry_visual_transform(item, info, (0., 0.).into());
+    let expected = (1. + (info.target_scale - 1.) * 0.6) * go.entry_focus_boost(item, info);
+    assert!((scale - expected).abs() < 0.001);
+    layout.bound_view_gesture_update(true, -0.8);
+    layout.bound_view_gesture_end(true, false);
+    assert!(!layout.is_grid_overview_open());
+}
+
+#[test]
+fn bound_grid_gesture_uses_original_monitor_scope() {
+    let mut layout = check_ops([Op::AddOutput(1), Op::AddOutput(2)]);
+    let output1 = layout.monitors().next().unwrap().output.clone();
+    let output2 = layout.monitors().nth(1).unwrap().output.clone();
+    layout.focus_output(&output1);
+    layout.bound_view_gesture_begin(true);
+    layout.focus_output(&output2);
+    layout.bound_view_gesture_end(true, true);
+    assert!(layout.monitors().all(|mon| !mon.is_grid_overview_open()));
+}
+
+#[test]
 fn grid_overview_fullscreen_preview_is_larger_than_normal_column() {
     let ops = [
         Op::AddOutput(1),

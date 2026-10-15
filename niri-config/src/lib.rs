@@ -1954,12 +1954,35 @@ mod tests {
                     bottom_left: None,
                     bottom_right: None,
                 },
-                workspace_switch_fingers: 3,
+                workspace_switch_fingers: 4,
                 workspace_switch_axis: Vertical,
-                view_scroll_fingers: 3,
-                overview_fingers: 4,
+                view_scroll_fingers: 0,
+                overview_fingers: 0,
                 swipe_threshold: 16.0,
-                swipes: [],
+                swipes: [
+                    SwipeBinding {
+                        fingers: 4,
+                        direction: Left,
+                        action: FocusColumnLeft,
+                    },
+                    SwipeBinding {
+                        fingers: 4,
+                        direction: Right,
+                        action: FocusColumnRight,
+                    },
+                ],
+                pinches: [
+                    PinchBinding {
+                        fingers: 4,
+                        direction: In,
+                        action: OpenGridOverview,
+                    },
+                    PinchBinding {
+                        fingers: 4,
+                        direction: Out,
+                        action: OpenOverview,
+                    },
+                ],
             },
             overview: Overview {
                 zoom: 0.5,

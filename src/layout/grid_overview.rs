@@ -163,7 +163,10 @@ impl<W: LayoutElement> GridOverview<W> {
     }
 
     pub fn is_animation(&self) -> bool {
-        self.progress.as_ref().map_or(false, |p| p.is_animation()) || self.rearrange_anim.is_some()
+        self.progress
+            .as_ref()
+            .is_some_and(|p| !matches!(p, OverviewProgress::Open))
+            || self.rearrange_anim.is_some()
     }
 
     pub fn toggle(&mut self) {
@@ -224,7 +227,10 @@ impl<W: LayoutElement> GridOverview<W> {
         let opening_retarget_value = if self.open
             && rearrange_value.is_none()
             && !restart_rearrange
-            && self.progress.as_ref().is_some_and(|p| p.is_animation())
+            && self
+                .progress
+                .as_ref()
+                .is_some_and(|p| !matches!(p, OverviewProgress::Open))
         {
             Some(progress_value)
         } else {
@@ -424,7 +430,7 @@ impl<W: LayoutElement> GridOverview<W> {
             && self
                 .progress
                 .as_ref()
-                .is_some_and(|progress| progress.is_animation());
+                .is_some_and(|progress| !matches!(progress, OverviewProgress::Open));
 
         let normal_pos = Self::matching_value(&self.entry_positions, item)
             .copied()

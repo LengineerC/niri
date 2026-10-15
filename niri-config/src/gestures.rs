@@ -26,8 +26,16 @@ mod swipe_tests {
         assert!(config.input.touchpad.three_finger_drag);
         assert_eq!(config.gestures.workspace_switch_fingers, 4);
         assert_eq!(config.gestures.workspace_switch_axis, SwipeAxis::Horizontal);
-        assert_eq!(config.gestures.swipes[0].action, Action::OpenOverview);
-        assert_eq!(config.gestures.swipes[1].action, Action::OpenGridOverview);
+        assert!(config
+            .gestures
+            .swipes
+            .iter()
+            .any(|b| b.direction == SwipeDirection::Up && b.action == Action::OpenOverview));
+        assert!(config
+            .gestures
+            .swipes
+            .iter()
+            .any(|b| b.direction == SwipeDirection::Down && b.action == Action::OpenGridOverview));
     }
 
     #[test]
@@ -47,9 +55,12 @@ mod swipe_tests {
         for part in parts {
             gestures.merge_with(&part);
         }
-        assert_eq!(gestures.swipes.len(), 2);
-        assert_eq!(gestures.swipes[0].action, Action::OpenGridOverview);
-        assert_eq!(gestures.view_scroll_fingers, 3);
+        assert_eq!(gestures.swipes.len(), 3);
+        assert!(gestures
+            .swipes
+            .iter()
+            .any(|b| b.direction == SwipeDirection::Up && b.action == Action::OpenGridOverview));
+        assert_eq!(gestures.view_scroll_fingers, 0);
     }
 
     #[test]
@@ -61,6 +72,33 @@ mod swipe_tests {
             "swipe fingers=4 direction=\"up\" {}",
             "swipe fingers=4 direction=\"up\" { open-overview; close-overview; }",
             "swipe-threshold 0",
+        ] {
+            assert!(
+                Config::parse_mem(&format!("gestures {{ {body}; }}")).is_err(),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn pinch_bindings_parse_and_override_defaults() {
+        let config = Config::parse_mem(
+            r#"gestures {
+            pinch fingers=4 direction="in" { close-grid-overview; }
+            pinch fingers=5 direction="out" { open-overview; }
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(config.gestures.pinches.len(), 3);
+        assert!(config.gestures.pinches.iter().any(|b| b.fingers == 4
+            && b.direction == PinchDirection::In
+            && b.action == Action::CloseGridOverview));
+        for body in [
+            "pinch fingers=2 direction=\"in\" { open-overview; }",
+            "pinch fingers=6 direction=\"out\" { open-overview; }",
+            "pinch fingers=4 direction=\"up\" { open-overview; }",
+            "pinch fingers=4 direction=\"in\" {}",
+            "pinch fingers=4 direction=\"out\" { open-overview; close-overview; }",
         ] {
             assert!(
                 Config::parse_mem(&format!("gestures {{ {body}; }}")).is_err(),
@@ -81,6 +119,7 @@ pub struct Gestures {
     pub overview_fingers: u8,
     pub swipe_threshold: f64,
     pub swipes: Vec<SwipeBinding>,
+    pub pinches: Vec<PinchBinding>,
 }
 
 impl Default for Gestures {
@@ -89,12 +128,35 @@ impl Default for Gestures {
             dnd_edge_view_scroll: Default::default(),
             dnd_edge_workspace_switch: Default::default(),
             hot_corners: Default::default(),
-            workspace_switch_fingers: 3,
+            workspace_switch_fingers: 4,
             workspace_switch_axis: SwipeAxis::Vertical,
-            view_scroll_fingers: 3,
-            overview_fingers: 4,
+            view_scroll_fingers: 0,
+            overview_fingers: 0,
             swipe_threshold: 16.,
-            swipes: Vec::new(),
+            swipes: vec![
+                SwipeBinding {
+                    fingers: 4,
+                    direction: SwipeDirection::Left,
+                    action: crate::Action::FocusColumnLeft,
+                },
+                SwipeBinding {
+                    fingers: 4,
+                    direction: SwipeDirection::Right,
+                    action: crate::Action::FocusColumnRight,
+                },
+            ],
+            pinches: vec![
+                PinchBinding {
+                    fingers: 4,
+                    direction: PinchDirection::In,
+                    action: crate::Action::OpenGridOverview,
+                },
+                PinchBinding {
+                    fingers: 4,
+                    direction: PinchDirection::Out,
+                    action: crate::Action::OpenOverview,
+                },
+            ],
         }
     }
 }
@@ -112,6 +174,49 @@ pub enum SwipeDirection {
     Right,
     Up,
     Down,
+}
+
+#[derive(knuffel::DecodeScalar, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinchDirection {
+    In,
+    Out,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinchBinding {
+    pub fingers: u8,
+    pub direction: PinchDirection,
+    pub action: crate::Action,
+}
+
+impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for PinchBinding {
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, knuffel::errors::DecodeError<S>> {
+        #[derive(knuffel::Decode)]
+        struct Raw {
+            #[knuffel(property)]
+            fingers: u8,
+            #[knuffel(property)]
+            direction: PinchDirection,
+            #[knuffel(children)]
+            actions: Vec<crate::Action>,
+        }
+        let raw = Raw::decode_node(node, ctx)?;
+        if !(3..=5).contains(&raw.fingers) || raw.actions.len() != 1 {
+            return Err(knuffel::errors::DecodeError::unexpected(
+                node,
+                "pinch",
+                "fingers must be between 3 and 5, and exactly one action is required",
+            ));
+        }
+        Ok(Self {
+            fingers: raw.fingers,
+            direction: raw.direction,
+            action: raw.actions.into_iter().next().unwrap(),
+        })
+    }
 }
 
 impl SwipeDirection {
@@ -187,6 +292,8 @@ pub struct GesturesPart {
     pub swipe_threshold: Option<FloatOrInt<1, 1000>>,
     #[knuffel(children(name = "swipe"))]
     pub swipes: Vec<SwipeBinding>,
+    #[knuffel(children(name = "pinch"))]
+    pub pinches: Vec<PinchBinding>,
 }
 
 impl MergeWith<GesturesPart> for Gestures {
@@ -209,6 +316,11 @@ impl MergeWith<GesturesPart> for Gestures {
             self.swipes
                 .retain(|b| b.fingers != binding.fingers || b.direction != binding.direction);
             self.swipes.push(binding.clone());
+        }
+        for binding in &part.pinches {
+            self.pinches
+                .retain(|b| b.fingers != binding.fingers || b.direction != binding.direction);
+            self.pinches.push(binding.clone());
         }
     }
 }

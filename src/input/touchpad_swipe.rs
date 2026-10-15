@@ -1,4 +1,4 @@
-use niri_config::gestures::{Gestures, SwipeAxis, SwipeDirection};
+use niri_config::gestures::{Gestures, PinchBinding, PinchDirection, SwipeAxis, SwipeDirection};
 use niri_config::Action;
 
 /// Snapshot the mapping at begin so a config reload cannot change a gesture halfway through.
@@ -6,7 +6,8 @@ pub struct TouchpadSwipe {
     pub device_id: String,
     config: Gestures,
     fingers: u32,
-    cumulative: (f64, f64),
+    pub cumulative: (f64, f64),
+    pub direction: Option<SwipeDirection>,
     pub action: SwipeAction,
 }
 
@@ -17,6 +18,7 @@ pub enum SwipeAction {
     WorkspaceSwitch(SwipeAxis),
     Overview,
     Binding(Action),
+    View { grid: bool, opening: bool },
     Ignored,
     Forwarded,
 }
@@ -50,17 +52,18 @@ impl TouchpadSwipe {
             config,
             fingers,
             cumulative: (0., 0.),
+            direction: None,
             action,
         }
     }
 
     /// Directions follow physical finger motion, independently of natural scrolling.
     pub fn recognize(&mut self, dx: f64, dy: f64) -> bool {
+        self.cumulative.0 += dx;
+        self.cumulative.1 += dy;
         if self.action != SwipeAction::Pending {
             return false;
         }
-        self.cumulative.0 += dx;
-        self.cumulative.1 += dy;
         let (x, y) = self.cumulative;
         if x.hypot(y) < self.config.swipe_threshold {
             return false;
@@ -76,6 +79,7 @@ impl TouchpadSwipe {
         } else {
             SwipeDirection::Down
         };
+        self.direction = Some(direction);
         self.action = if let Some(binding) = self
             .config
             .swipes
@@ -100,6 +104,97 @@ impl TouchpadSwipe {
         };
         true
     }
+}
+
+pub struct TouchpadPinch {
+    pub device_id: String,
+    pub bindings: Vec<PinchBinding>,
+    pub action: SwipeAction,
+    pub direction: Option<PinchDirection>,
+}
+
+impl TouchpadPinch {
+    /// An opposite view-opening binding closes the currently open view first.
+    /// Explicit non-opening bindings (including close/toggle and user actions)
+    /// retain their configured meaning.
+    pub fn resolve_reverse_view(&mut self, grid_open: bool, overview_open: bool) {
+        if !matches!(
+            self.action,
+            SwipeAction::Binding(Action::OpenOverview | Action::OpenGridOverview)
+        ) {
+            return;
+        }
+        let opposite = match self.direction {
+            Some(PinchDirection::In) => PinchDirection::Out,
+            Some(PinchDirection::Out) => PinchDirection::In,
+            None => return,
+        };
+        let Some(binding) = self.bindings.iter().find(|b| b.direction == opposite) else {
+            return;
+        };
+        match binding.action {
+            Action::OpenOverview if overview_open => {
+                self.action = SwipeAction::Binding(Action::CloseOverview)
+            }
+            Action::OpenGridOverview if grid_open => {
+                self.action = SwipeAction::Binding(Action::CloseGridOverview)
+            }
+            _ => (),
+        }
+    }
+
+    pub fn new(device_id: String, fingers: u32, config: &Gestures, blocked: bool) -> Self {
+        let bindings: Vec<_> = config
+            .pinches
+            .iter()
+            .filter(|b| u32::from(b.fingers) == fingers)
+            .cloned()
+            .collect();
+        let action = if blocked {
+            SwipeAction::Ignored
+        } else if bindings.is_empty() {
+            SwipeAction::Forwarded
+        } else {
+            SwipeAction::Pending
+        };
+        Self {
+            device_id,
+            bindings,
+            action,
+            direction: None,
+        }
+    }
+
+    pub fn recognize(&mut self, scale: f64) -> bool {
+        if self.action != SwipeAction::Pending
+            || !scale.is_finite()
+            || scale <= 0.
+            || (scale - 1.).abs() < 0.03
+        {
+            return false;
+        }
+        let direction = if scale < 1. {
+            PinchDirection::In
+        } else {
+            PinchDirection::Out
+        };
+        self.direction = Some(direction);
+        self.action = self
+            .bindings
+            .iter()
+            .find(|b| b.direction == direction)
+            .map_or(SwipeAction::Ignored, |b| {
+                SwipeAction::Binding(b.action.clone())
+            });
+        true
+    }
+}
+
+pub struct TouchpadResize {
+    pub device_id: String,
+    pub window: smithay::desktop::Window,
+    pub delta: smithay::utils::Point<f64, smithay::utils::Logical>,
+    pub active_axes: [bool; 2],
 }
 
 pub fn configure_three_finger_drag(device: &input::Device, enabled: bool) {
@@ -140,23 +235,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_preserve_three_finger_navigation_and_four_finger_overview() {
-        let mut horizontal = TouchpadSwipe::new("a".into(), 3, Gestures::default(), false);
+    fn defaults_use_four_finger_workspaces_and_window_switching() {
+        let mut horizontal = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
         assert!(!horizontal.recognize(4., 0.));
         assert_eq!(horizontal.action, SwipeAction::Pending);
         assert!(horizontal.recognize(12., 0.));
-        assert_eq!(horizontal.action, SwipeAction::ViewScroll);
+        assert_eq!(
+            horizontal.action,
+            SwipeAction::Binding(Action::FocusColumnRight)
+        );
         assert!(!horizontal.recognize(0., 100.));
-        assert_eq!(horizontal.action, SwipeAction::ViewScroll);
-        let mut vertical = TouchpadSwipe::new("a".into(), 3, Gestures::default(), false);
+        assert_eq!(
+            horizontal.action,
+            SwipeAction::Binding(Action::FocusColumnRight)
+        );
+        let mut vertical = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
         assert!(vertical.recognize(0., -16.));
         assert_eq!(
             vertical.action,
             SwipeAction::WorkspaceSwitch(SwipeAxis::Vertical)
         );
         assert_eq!(
-            TouchpadSwipe::new("a".into(), 4, Gestures::default(), false).action,
-            SwipeAction::Overview
+            TouchpadSwipe::new("a".into(), 3, Gestures::default(), false).action,
+            SwipeAction::Forwarded
         );
     }
 
@@ -171,6 +272,12 @@ mod tests {
         }"#,
         )
         .unwrap();
+        let mut config = config;
+        config
+            .gestures
+            .swipes
+            .retain(|b| b.direction == SwipeDirection::Up);
+        config.gestures.overview_fingers = 4;
         for (dx, dy, expected) in [
             (
                 -20.,
@@ -193,6 +300,7 @@ mod tests {
             workspace_switch_fingers: 0,
             view_scroll_fingers: 0,
             overview_fingers: 0,
+            swipes: vec![],
             ..Default::default()
         };
         assert_eq!(

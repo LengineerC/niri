@@ -54,21 +54,25 @@ Switch workspaces by holding <kbd>Mod</kbd> and the middle mouse button (or the 
 
 #### Workspace Switch
 
-Switch workspaces with three-finger vertical swipes.
+Switch workspaces with four-finger vertical swipes.
 
 The finger count and axis can be changed in the [gesture configuration](./Configuration:-Gestures.md#touchpad-swipes).
 
 #### Horizontal View Movement
 
-Move the view horizontally with three-finger horizontal swipes.
+Four-finger horizontal swipes focus the window/column to the left or right. Continuous horizontal view movement can be enabled with `view-scroll-fingers` after overriding the corresponding action bindings.
 
 #### Open and Close the Overview
 
 <sup>Since: 25.05</sup>
 
-Open and close the overview with a four-finger vertical swipe.
+Spread four fingers to open overview; pinch four fingers inward to open grid overview. Transitions follow the fingers and can be reversed before release.
 
 You can configure the finger count or replace individual swipe directions with actions in the [gesture configuration](./Configuration:-Gestures.md#touchpad-swipes).
+
+#### Two-finger Resize
+
+Hold Mod and drag two fingers to resize the window under the pointer, like Mod + right mouse drag. The edge/corner is chosen from the initial pointer position. Release Mod or lift the fingers to finish. This replaces the old Mod + two-finger fallback to wheel bindings, without changing actual mouse wheel bindings.
 
 #### Three-finger Drag
 

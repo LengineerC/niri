@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use niri_config::gestures::SwipeAxis;
+use niri_config::gestures::{PinchDirection, SwipeAxis, SwipeDirection};
 
 use calloop::timer::{TimeoutAction, Timer};
 use input::event::gesture::GestureEventCoordinates as _;
@@ -72,7 +72,9 @@ pub mod swipe_tracker;
 pub mod touch_overview_grab;
 pub mod touchpad_swipe;
 
-use touchpad_swipe::{configure_three_finger_drag, SwipeAction, TouchpadSwipe};
+use touchpad_swipe::{
+    configure_three_finger_drag, SwipeAction, TouchpadPinch, TouchpadResize, TouchpadSwipe,
+};
 
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
 
@@ -295,6 +297,22 @@ impl State {
     fn on_device_removed(&mut self, device: impl Device) {
         if self
             .niri
+            .touchpad_pinch
+            .as_ref()
+            .is_some_and(|s| s.device_id == device.id())
+        {
+            self.finish_touchpad_pinch(smithay::backend::input::InputTime::now(), true);
+        }
+        if self
+            .niri
+            .touchpad_resize
+            .as_ref()
+            .is_some_and(|s| s.device_id == device.id())
+        {
+            self.finish_touchpad_resize();
+        }
+        if self
+            .niri
             .touchpad_swipe
             .as_ref()
             .is_some_and(|s| s.device_id == device.id())
@@ -448,6 +466,13 @@ impl State {
         let time = Event::time(&event);
         let pressed = event.state() == KeyState::Pressed;
 
+        // A keyboard action (notably Escape) takes over from an in-flight touchpad
+        // transition; its later end event must not reopen a dismissed view.
+        if pressed {
+            self.finish_touchpad_swipe(time, true);
+            self.finish_touchpad_pinch(time, true);
+        }
+
         // Stop bind key repeat on any release. This won't work 100% correctly in cases like:
         // 1. Press Mod
         // 2. Press Left (repeat starts)
@@ -499,6 +524,13 @@ impl State {
             serial,
             time,
             |this, mods, keysym| {
+                let compositor_mod = this
+                    .backend
+                    .mod_key(&this.niri.config.borrow())
+                    .to_modifiers();
+                if !modifiers_from_state(*mods).contains(compositor_mod) {
+                    this.finish_touchpad_resize();
+                }
                 let key_code = event.key_code();
                 let modified = keysym.modified_sym();
                 let raw = keysym.raw_latin_sym_or_raw_current_sym();
@@ -3104,6 +3136,9 @@ impl State {
     }
 
     fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
+        self.finish_touchpad_resize();
+        self.finish_touchpad_swipe(event.time(), true);
+        self.finish_touchpad_pinch(event.time(), true);
         let pointer = self.niri.seat.get_pointer().unwrap();
 
         let serial = SERIAL_COUNTER.next_serial();
@@ -3563,6 +3598,96 @@ impl State {
         let vertical_amount_v120 = event.amount_v120(Axis::Vertical);
         let horizontal_amount = event.amount(Axis::Horizontal);
         let vertical_amount = event.amount(Axis::Vertical);
+
+        // Finger scrolling is the two-finger translation stream. Reserve Mod+finger
+        // for resizing before the legacy wheel-binding fallback can consume it.
+        if source == AxisSource::Finger {
+            let mods =
+                modifiers_from_state(self.niri.seat.get_keyboard().unwrap().modifier_state());
+            let mod_down = mods.contains(mod_key.to_modifiers());
+            let was_resizing = self.niri.touchpad_resize.is_some();
+            if was_resizing && (!mod_down || self.touchpad_swipes_blocked() || pointer.is_grabbed())
+            {
+                self.finish_touchpad_resize();
+            }
+            if mod_down || was_resizing {
+                self.niri.horizontal_finger_scroll_tracker.reset();
+                self.niri.vertical_finger_scroll_tracker.reset();
+                if self.niri.overview_scroll_swipe_gesture.reset() {
+                    if self.niri.overview_scroll_swipe_gesture.is_vertical() {
+                        self.niri.layout.workspace_switch_gesture_end(Some(true));
+                    } else {
+                        self.niri.layout.view_offset_gesture_end(Some(true));
+                    }
+                    self.niri.queue_redraw_all();
+                }
+                if !self.touchpad_swipes_blocked() && !pointer.is_grabbed() && mod_down {
+                    if self.niri.touchpad_resize.is_none()
+                        && (horizontal_amount.unwrap_or(0.) != 0.
+                            || vertical_amount.unwrap_or(0.) != 0.)
+                    {
+                        let location = pointer.current_location();
+                        let edges = self.niri.output_under(location).and_then(|(output, pos)| {
+                            self.niri.layout.resize_edges_under(output, pos)
+                        });
+                        let window = self.niri.window_under(location).map(|w| w.window.clone());
+                        if let (Some(edges), Some(window)) = (edges, window) {
+                            if !edges.is_empty()
+                                && self
+                                    .niri
+                                    .layout
+                                    .interactive_resize_begin(window.clone(), edges)
+                            {
+                                self.niri.layout.activate_window(&window);
+                                self.niri.cursor_manager.set_cursor_image(
+                                    CursorImageStatus::Named(edges.cursor_icon()),
+                                );
+                                self.niri.touchpad_resize = Some(TouchpadResize {
+                                    device_id: event.device().id(),
+                                    window,
+                                    delta: (0., 0.).into(),
+                                    active_axes: [false; 2],
+                                });
+                            }
+                        }
+                    }
+                    if let Some(resize) = &mut self.niri.touchpad_resize {
+                        if resize.device_id == event.device().id() {
+                            // Axis amounts include natural-scroll inversion. Undo it so the
+                            // grabbed edge follows physical fingers, just like a mouse drag.
+                            let sign = |axis| {
+                                if event.relative_direction(axis)
+                                    == smithay::backend::input::AxisRelativeDirection::Inverted
+                                {
+                                    -1.
+                                } else {
+                                    1.
+                                }
+                            };
+                            resize.delta.x +=
+                                horizontal_amount.unwrap_or(0.) * sign(Axis::Horizontal);
+                            resize.delta.y += vertical_amount.unwrap_or(0.) * sign(Axis::Vertical);
+                            for (idx, amount) in
+                                [horizontal_amount, vertical_amount].into_iter().enumerate()
+                            {
+                                if let Some(amount) = amount {
+                                    resize.active_axes[idx] = amount != 0.;
+                                }
+                            }
+                            let ongoing = self
+                                .niri
+                                .layout
+                                .interactive_resize_update(&resize.window, resize.delta);
+                            if !ongoing || !resize.active_axes.iter().any(|x| *x) {
+                                self.finish_touchpad_resize();
+                            }
+                            self.niri.queue_redraw_all();
+                        }
+                    }
+                }
+                return;
+            }
+        }
 
         #[cfg(feature = "xdp-gnome-screencast")]
         if self.niri.screen_cast_picker.is_open() {
@@ -4499,7 +4624,36 @@ impl State {
             || self.niri.screenshot_ui.is_open()
     }
 
+    fn finish_touchpad_resize(&mut self) {
+        if let Some(resize) = self.niri.touchpad_resize.take() {
+            self.niri.layout.interactive_resize_end(&resize.window);
+            self.niri
+                .cursor_manager
+                .set_cursor_image(CursorImageStatus::default_named());
+            self.niri.queue_redraw_all();
+        }
+    }
+
+    fn begin_bound_view_action(&mut self, action: &Action) -> Option<SwipeAction> {
+        let (grid, opening) = match action {
+            Action::OpenOverview => (false, true),
+            Action::CloseOverview => (false, false),
+            Action::ToggleOverview => (false, !self.niri.layout.is_overview_open()),
+            Action::OpenGridOverview => (true, true),
+            Action::CloseGridOverview => (true, false),
+            Action::ToggleGridOverview => (true, !self.niri.layout.is_grid_overview_open()),
+            _ => return None,
+        };
+        if let Some(output) = self.niri.output_under_cursor() {
+            self.niri.layout.focus_output(&output);
+        }
+        self.niri.layout.bound_view_gesture_begin(grid);
+        Some(SwipeAction::View { grid, opening })
+    }
+
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
+        self.finish_touchpad_pinch(event.time(), true);
+        self.finish_touchpad_resize();
         self.finish_touchpad_swipe(event.time(), true);
         let pointer = self.niri.seat.get_pointer().unwrap();
         let blocked = self.touchpad_swipes_blocked() || pointer.is_grabbed();
@@ -4571,7 +4725,16 @@ impl State {
                 delta_y = -delta_y;
             }
         }
+        if recognized {
+            if let SwipeAction::Binding(ref action) = swipe.action {
+                if let Some(view) = self.begin_bound_view_action(action) {
+                    swipe.action = view;
+                }
+            }
+        }
         let action = swipe.action.clone();
+        let cumulative = swipe.cumulative;
+        let direction = swipe.direction;
         self.niri.touchpad_swipe = Some(swipe);
 
         if recognized {
@@ -4609,6 +4772,19 @@ impl State {
 
         let timestamp = Duration::from_micros(event.time().micros());
         match action {
+            SwipeAction::View { grid, opening } => {
+                let amount = match direction {
+                    Some(SwipeDirection::Left) => -cumulative.0,
+                    Some(SwipeDirection::Right) => cumulative.0,
+                    Some(SwipeDirection::Up) => -cumulative.1,
+                    Some(SwipeDirection::Down) => cumulative.1,
+                    None => 0.,
+                } / 200.;
+                self.niri
+                    .layout
+                    .bound_view_gesture_update(grid, if opening { amount } else { -amount });
+                self.niri.queue_redraw_all();
+            }
             SwipeAction::WorkspaceSwitch(axis) => {
                 let delta = match axis {
                     SwipeAxis::Horizontal => delta_x,
@@ -4676,6 +4852,10 @@ impl State {
             return;
         };
         match swipe.action {
+            SwipeAction::View { grid, .. } => {
+                self.niri.layout.bound_view_gesture_end(grid, cancelled);
+                self.niri.queue_redraw_all();
+            }
             SwipeAction::WorkspaceSwitch(_) => {
                 if let Some(output) = self.niri.layout.workspace_switch_gesture_end(Some(true)) {
                     self.niri.queue_redraw(&output);
@@ -4717,8 +4897,22 @@ impl State {
     }
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
+        self.finish_touchpad_resize();
+        self.finish_touchpad_pinch(event.time(), true);
+        self.finish_touchpad_swipe(event.time(), true);
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
+        let pinch = TouchpadPinch::new(
+            event.device().id(),
+            event.fingers(),
+            &self.niri.config.borrow().gestures,
+            self.touchpad_swipes_blocked() || pointer.is_grabbed(),
+        );
+        let forward = pinch.action == SwipeAction::Forwarded;
+        self.niri.touchpad_pinch = Some(pinch);
+        if !forward {
+            return;
+        }
 
         if self.update_pointer_contents() {
             pointer.frame(self);
@@ -4735,6 +4929,59 @@ impl State {
     }
 
     fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
+        let Some(mut pinch) = self.niri.touchpad_pinch.take() else {
+            return;
+        };
+        if pinch.device_id != event.device().id() {
+            self.niri.touchpad_pinch = Some(pinch);
+            return;
+        }
+        if self.touchpad_swipes_blocked() {
+            self.niri.touchpad_pinch = Some(pinch);
+            self.finish_touchpad_pinch(event.time(), true);
+            return;
+        }
+        if pinch.recognize(event.scale()) {
+            // Resolve on the same output that the bound action will operate on.
+            if matches!(
+                pinch.action,
+                SwipeAction::Binding(Action::OpenOverview | Action::OpenGridOverview)
+            ) {
+                if let Some(output) = self.niri.output_under_cursor() {
+                    self.niri.layout.focus_output(&output);
+                }
+            }
+            pinch.resolve_reverse_view(
+                self.niri.layout.is_grid_overview_open(),
+                self.niri.layout.is_overview_open(),
+            );
+            if let SwipeAction::Binding(ref action) = pinch.action {
+                if let Some(view) = self.begin_bound_view_action(action) {
+                    pinch.action = view;
+                }
+            }
+        }
+        if let SwipeAction::View { grid, opening } = pinch.action {
+            // libinput scale is absolute from begin. Log scale makes reciprocal
+            // inward/outward movements symmetrical and allows reversing mid-gesture.
+            if event.scale().is_finite() && event.scale() > 0. {
+                let sign = if pinch.direction == Some(PinchDirection::In) {
+                    -1.
+                } else {
+                    1.
+                };
+                let amount = event.scale().ln() * sign / 0.5;
+                self.niri
+                    .layout
+                    .bound_view_gesture_update(grid, if opening { amount } else { -amount });
+                self.niri.queue_redraw_all();
+            }
+        }
+        let forward = pinch.action == SwipeAction::Forwarded;
+        self.niri.touchpad_pinch = Some(pinch);
+        if !forward {
+            return;
+        }
         let pointer = self.niri.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
@@ -4770,6 +5017,38 @@ impl State {
     }
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
+        if self
+            .niri
+            .touchpad_pinch
+            .as_ref()
+            .is_some_and(|p| p.device_id == event.device().id())
+        {
+            self.finish_touchpad_pinch(event.time(), event.cancelled());
+        }
+    }
+
+    fn finish_touchpad_pinch(&mut self, time: smithay::backend::input::InputTime, cancelled: bool) {
+        let Some(pinch) = self.niri.touchpad_pinch.take() else {
+            return;
+        };
+        match pinch.action {
+            SwipeAction::View { grid, .. } => {
+                self.niri.layout.bound_view_gesture_end(grid, cancelled);
+                self.niri.queue_redraw_all();
+            }
+            SwipeAction::Binding(action) if !cancelled && !self.touchpad_swipes_blocked() => {
+                if let Some(output) = self.niri.output_under_cursor() {
+                    self.niri.layout.focus_output(&output);
+                }
+                self.do_action(action, false);
+                self.niri.queue_redraw_all();
+            }
+            SwipeAction::Forwarded => self.forward_pinch_end(time, cancelled),
+            _ => (),
+        }
+    }
+
+    fn forward_pinch_end(&mut self, time: smithay::backend::input::InputTime, cancelled: bool) {
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
 
@@ -4781,8 +5060,8 @@ impl State {
             self,
             &GesturePinchEndEvent {
                 serial,
-                time: event.time(),
-                cancelled: event.cancelled(),
+                time,
+                cancelled,
             },
         );
     }

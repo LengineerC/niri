@@ -432,6 +432,31 @@ impl<W: LayoutElement> Workspace<W> {
             .and_then(|g| g.progress.as_ref().map(|p| p.value()))
     }
 
+    pub(super) fn prepare_grid_gesture(&mut self) {
+        let Some(go) = &self.grid_overview else {
+            return;
+        };
+        // Completed opening animations cache the grid positions as their new origins.
+        // Restore normal-layout origins before scrubbing backwards to close the grid.
+        if go.progress_value() >= 1. {
+            let positions = go
+                .layout
+                .entries
+                .iter()
+                .map(|(item, info)| {
+                    (
+                        item.clone(),
+                        self.grid_item_normal_render_pos(item, false)
+                            .unwrap_or(info.target_pos),
+                    )
+                })
+                .collect();
+            let go = self.grid_overview.as_mut().unwrap();
+            go.entry_positions = positions;
+            go.entry_scales.clear();
+        }
+    }
+
     pub fn is_grid_overview_animation(&self) -> bool {
         self.grid_overview
             .as_ref()
@@ -2841,7 +2866,7 @@ impl<W: LayoutElement> Workspace<W> {
         let is_opening = go
             .progress
             .as_ref()
-            .is_some_and(|progress| go.open && progress.is_animation());
+            .is_some_and(|progress| go.open && !matches!(progress, super::OverviewProgress::Open));
         let should_render_grid_item =
             |item: &GridItem<W>| !is_closing || self.grid_item_visible_when_closing(item);
 

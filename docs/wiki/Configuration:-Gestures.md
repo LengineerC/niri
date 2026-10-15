@@ -9,11 +9,15 @@ Here's a quick glance at the available settings along with their default values.
 
 ```kdl
 gestures {
-    workspace-switch-fingers 3
+    workspace-switch-fingers 4
     workspace-switch-axis "vertical"
-    view-scroll-fingers 3
-    overview-fingers 4
+    view-scroll-fingers 0
+    overview-fingers 0
     swipe-threshold 16
+    swipe fingers=4 direction="left" { focus-column-left; }
+    swipe fingers=4 direction="right" { focus-column-right; }
+    pinch fingers=4 direction="in" { open-grid-overview; }
+    pinch fingers=4 direction="out" { open-overview; }
 
     dnd-edge-view-scroll {
         trigger-width 30
@@ -41,10 +45,10 @@ gestures {
 
 The built-in swipes are configurable and retain their finger-following animations:
 
-- `workspace-switch-fingers`: finger count for switching workspaces (default `3`).
+- `workspace-switch-fingers`: finger count for switching workspaces (default `4`).
 - `workspace-switch-axis`: `"vertical"` (default) or `"horizontal"`. This changes the input axis, not niri's vertical workspace arrangement.
-- `view-scroll-fingers`: finger count for scrolling the tiling view horizontally (default `3`).
-- `overview-fingers`: finger count for opening/closing overview vertically (default `4`).
+- `view-scroll-fingers`: finger count for scrolling the tiling view horizontally (default `0`, disabled).
+- `overview-fingers`: finger count for opening/closing overview vertically (default `0`, disabled).
 - Set a finger count to `0` to disable that built-in gesture. Use `3`, `4`, or `5` for touchpads capable of reporting those gestures.
 - `swipe-threshold`: accumulated movement needed to choose a direction, in libinput's unaccelerated gesture units (default `16`, range `1`–`1000`).
 
@@ -55,13 +59,23 @@ The built-in scrolling gestures continue to honor natural scrolling as before.
 
 Bindings take precedence over built-in gestures in that direction. Otherwise, workspace switching takes precedence over view scrolling, then overview.
 An action is selected when the threshold is crossed and runs once when the fingers are released; cancellation or a short swipe does not run an action.
-Action bindings use ordinary action animations, rather than continuous finger-following progress.
+Exception: open/close/toggle actions for grid overview and overview update the transition continuously while the fingers move. Reversing the gesture reverses the transition; release settles toward the nearest endpoint, and cancellation returns toward the starting endpoint. A full swipe transition spans 200 unaccelerated gesture units.
 Changing the config during a gesture takes effect on the next gesture.
 Later bindings with the same finger count and direction replace earlier bindings, including across included files.
 
 When any binding or built-in gesture uses a finger count, niri owns the complete gesture sequence for that count, including unmapped directions.
 Unused finger counts are forwarded to applications. Compositor swipes are suppressed while locked, in the screenshot/MRU/portal picker UI, or when starting during a pointer grab.
-Two-finger scrolling and client pinch gestures are unchanged.
+Ordinary two-finger scrolling is unchanged. Holding Mod while moving two fingers resizes the window under the pointer, using the same edge selection as Mod + right mouse drag. This takes precedence over touchpad bindings and the wheel-binding fallback; actual mouse wheel bindings remain unchanged. Release the fingers or Mod to finish resizing. Natural scrolling does not reverse resize direction.
+
+### Touchpad pinches
+
+With the default paired view-opening bindings, the opposite pinch exits the open view first: spread four fingers to leave grid overview, or pinch inward to leave overview. Exit transitions follow the fingers; cancellation keeps the original view open. This uses the opposite-direction binding for the same finger count, so swapping the two opening bindings also swaps the exit directions. Explicit non-opening actions (including close/toggle actions) retain their configured meaning.
+
+Use `pinch fingers=4 direction="in" { open-grid-overview; }` or `direction="out"` for spreading the fingers. Finger counts `3`–`5` and exactly one action are supported. The defaults are four-finger pinch-in for grid overview, pinch-out for overview, and four-finger left/right swipes for left/right window focus (`focus-column-left` / `focus-column-right`, also supported by the floating layout).
+
+Pinches are recognized after a 3% scale change. View transitions follow absolute pinch scale (a scale factor of approximately 0.61 inward or 1.65 outward spans a complete transition). Other actions run once on release. Direction selection stays fixed until release, so reversing a pinch retreats the same transition. Unbound finger counts, including normal two-finger application zoom, are forwarded to clients. The touchpad must report the requested finger count and pinch gestures through libinput.
+
+Pinch bindings merge by finger count and direction, just like swipe bindings. Existing explicit swipe bindings still override the new defaults: remove old four-finger up/down bindings to use vertical workspace switching.
 
 For a Mac-style setup:
 
@@ -74,18 +88,20 @@ input {
 }
 gestures {
     workspace-switch-fingers 4
-    workspace-switch-axis "horizontal"
+    workspace-switch-axis "vertical"
     view-scroll-fingers 0
     overview-fingers 0
     swipe-threshold 24
-    swipe fingers=4 direction="up" { open-overview; }
-    swipe fingers=4 direction="down" { open-grid-overview; }
+    swipe fingers=4 direction="left" { focus-column-left; }
+    swipe fingers=4 direction="right" { focus-column-right; }
+    pinch fingers=4 direction="in" { open-grid-overview; }
+    pinch fingers=4 direction="out" { open-overview; }
 }
 ```
 
-This provides native three-finger dragging, interactive four-finger horizontal workspace switching, and configurable up/down actions.
+This provides native three-finger dragging, interactive four-finger vertical workspace switching, horizontal window focus, and interactive pinch transitions.
 Grid overview is a workspace-wide window picker, not macOS's application-only App Exposé.
-For continuous four-finger overview instead of the up/down actions, remove both `swipe` bindings and set `overview-fingers 4`.
+To use vertical swiping for overview instead, set `workspace-switch-fingers 0` and `overview-fingers 4`, and remove any explicit up/down swipe bindings.
 The complete example is also available in `resources/mac-touchpad.kdl`.
 
 ### `dnd-edge-view-scroll`
