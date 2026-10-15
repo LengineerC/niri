@@ -3816,6 +3816,8 @@ fn bound_grid_gesture_progress_reverses_and_cancels() {
     ]);
     layout.bound_view_gesture_begin(true);
     layout.bound_view_gesture_update(true, 0.25);
+    layout.clock.set_unadjusted(Duration::from_millis(100));
+    layout.advance_animations();
     let go = layout.active_workspace().unwrap().grid_overview().unwrap();
     assert!((go.progress_value() - 0.25).abs() < 0.001);
     assert!(go.is_animation());
@@ -3824,6 +3826,8 @@ fn bound_grid_gesture_progress_reverses_and_cancels() {
     let boost = go.entry_focus_boost(item, info);
     assert!((scale - (1. + (info.target_scale - 1.) * 0.25) * boost).abs() < 0.001);
     layout.bound_view_gesture_update(true, 0.1);
+    layout.clock.set_unadjusted(Duration::from_millis(200));
+    layout.advance_animations();
     assert!(
         (layout
             .active_workspace()
@@ -3843,8 +3847,12 @@ fn bound_overview_gesture_progress_reverses_and_finishes() {
     let mut layout = check_ops([Op::AddOutput(1)]);
     layout.bound_view_gesture_begin(false);
     layout.bound_view_gesture_update(false, 0.75);
+    layout.clock.set_unadjusted(Duration::from_millis(200));
+    layout.advance_animations();
     assert_eq!(layout.overview_progress.as_ref().unwrap().value(), 0.75);
     layout.bound_view_gesture_update(false, 0.2);
+    layout.clock.set_unadjusted(Duration::from_millis(400));
+    layout.advance_animations();
     assert_eq!(layout.overview_progress.as_ref().unwrap().value(), 0.2);
     layout.bound_view_gesture_end(false, false);
     assert!(!layout.is_overview_open());
@@ -3868,6 +3876,57 @@ fn bound_grid_gesture_empty_output_cancellation_restores_state() {
 }
 
 #[test]
+fn bound_view_gesture_speed_is_capped_even_after_fast_release() {
+    for grid in [false, true] {
+        let mut layout = check_ops([
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+        ]);
+        let progress = |layout: &Layout<TestWindow>| {
+            if grid {
+                layout
+                    .active_workspace()
+                    .unwrap()
+                    .grid_overview_progress()
+                    .unwrap()
+            } else {
+                layout.overview_progress.as_ref().unwrap().value()
+            }
+        };
+        layout.bound_view_gesture_begin(grid);
+        layout.bound_view_gesture_update(grid, 100.);
+        assert_eq!(progress(&layout), 0.);
+        layout.bound_view_gesture_end(grid, false);
+        assert_eq!(progress(&layout), 0.);
+        assert!(layout.are_animations_ongoing(None));
+        layout.clock.set_unadjusted(Duration::from_millis(10));
+        layout.advance_animations();
+        assert!((progress(&layout) - 0.04).abs() < 0.001);
+        layout.clock.set_unadjusted(Duration::from_millis(250));
+        layout.advance_animations();
+        assert!((progress(&layout) - 1.).abs() < 0.001);
+    }
+}
+
+#[test]
+fn touchpad_corner_resize_allows_both_axes_from_window_center() {
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ]);
+    let ws = layout.active_workspace().unwrap();
+    let (tile, pos, _) = ws.tiles_with_render_positions().next().unwrap();
+    let size = tile.tile_size().to_f64();
+    let point = pos + Point::from((size.w * 0.6, size.h * 0.4));
+    assert_eq!(ws.resize_edges_under(point), Some(ResizeEdge::empty()));
+    assert_eq!(ws.resize_corner_under(point), Some(ResizeEdge::TOP_RIGHT));
+}
+
+#[test]
 fn bound_grid_reverse_gesture_scrubs_from_fully_open_and_closes() {
     let mut layout = check_ops([
         Op::AddOutput(1),
@@ -3878,11 +3937,12 @@ fn bound_grid_reverse_gesture_scrubs_from_fully_open_and_closes() {
     layout.bound_view_gesture_begin(true);
     layout.bound_view_gesture_update(true, 1.);
     layout.bound_view_gesture_end(true, false);
-    layout.clock.set_complete_instantly(true);
+    layout.clock.set_unadjusted(Duration::from_millis(300));
     layout.advance_animations();
-    layout.clock.set_complete_instantly(false);
     layout.bound_view_gesture_begin(true);
     layout.bound_view_gesture_update(true, -0.4);
+    layout.clock.set_unadjusted(Duration::from_millis(450));
+    layout.advance_animations();
     let go = layout.active_workspace().unwrap().grid_overview().unwrap();
     assert!((go.progress_value() - 0.6).abs() < 0.001);
     let (item, info) = &go.layout.entries[0];

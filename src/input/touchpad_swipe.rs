@@ -9,6 +9,7 @@ pub struct TouchpadSwipe {
     pub cumulative: (f64, f64),
     pub direction: Option<SwipeDirection>,
     pub action: SwipeAction,
+    candidate: Option<SwipeDirection>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,11 +55,15 @@ impl TouchpadSwipe {
             cumulative: (0., 0.),
             direction: None,
             action,
+            candidate: None,
         }
     }
 
     /// Directions follow physical finger motion, independently of natural scrolling.
     pub fn recognize(&mut self, dx: f64, dy: f64) -> bool {
+        if !dx.is_finite() || !dy.is_finite() {
+            return false;
+        }
         self.cumulative.0 += dx;
         self.cumulative.1 += dy;
         if self.action != SwipeAction::Pending {
@@ -66,6 +71,14 @@ impl TouchpadSwipe {
         }
         let (x, y) = self.cumulative;
         if x.hypot(y) < self.config.swipe_threshold {
+            self.candidate = None;
+            return false;
+        }
+        // Do not permanently choose an axis from a nearly diagonal first sample.
+        let major = x.abs().max(y.abs());
+        let minor = x.abs().min(y.abs());
+        if major < minor * 1.35 {
+            self.candidate = None;
             return false;
         }
         let direction = if x.abs() > y.abs() {
@@ -79,6 +92,10 @@ impl TouchpadSwipe {
         } else {
             SwipeDirection::Down
         };
+        if self.candidate != Some(direction) && major < self.config.swipe_threshold * 2. {
+            self.candidate = Some(direction);
+            return false;
+        }
         self.direction = Some(direction);
         self.action = if let Some(binding) = self
             .config
@@ -113,6 +130,8 @@ pub struct TouchpadPinch {
     pub direction: Option<PinchDirection>,
     threshold: f64,
     pub sensitivity: f64,
+    pub translation: (f64, f64),
+    candidate: Option<PinchDirection>,
 }
 
 impl TouchpadPinch {
@@ -166,15 +185,17 @@ impl TouchpadPinch {
             direction: None,
             threshold: config.pinch_threshold / 100.,
             sensitivity: config.pinch_sensitivity,
+            translation: (0., 0.),
+            candidate: None,
         }
     }
 
     pub fn recognize(&mut self, scale: f64) -> bool {
-        if self.action != SwipeAction::Pending
-            || !scale.is_finite()
-            || scale <= 0.
-            || scale.ln().abs() < self.threshold
-        {
+        if self.action != SwipeAction::Pending || !scale.is_finite() || scale <= 0. {
+            return false;
+        }
+        if scale.ln().abs() < self.threshold {
+            self.candidate = None;
             return false;
         }
         let direction = if scale < 1. {
@@ -182,6 +203,16 @@ impl TouchpadPinch {
         } else {
             PinchDirection::Out
         };
+        // Translation with tiny scale changes is usually finger placement drift,
+        // not a deliberate pinch. Keep collecting evidence instead of locking it.
+        if self.translation.0.hypot(self.translation.1) > 8. && scale.ln().abs() < 0.06 {
+            self.candidate = None;
+            return false;
+        }
+        if self.candidate != Some(direction) && scale.ln().abs() < self.threshold.max(0.04) {
+            self.candidate = Some(direction);
+            return false;
+        }
         self.direction = Some(direction);
         self.action = self
             .bindings
@@ -239,15 +270,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn diagonal_start_does_not_lock_wrong_swipe_axis() {
+        let mut swipe = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
+        assert!(!swipe.recognize(7., 6.));
+        assert!(!swipe.recognize(1., 6.));
+        assert!(swipe.recognize(0., 4.));
+        assert_eq!(
+            swipe.action,
+            SwipeAction::WorkspaceSwitch(SwipeAxis::Vertical)
+        );
+    }
+
+    #[test]
+    fn translating_fingers_do_not_trigger_weak_pinch() {
+        let mut pinch = TouchpadPinch::new("a".into(), 4, &Gestures::default(), false);
+        pinch.translation = (20., 5.);
+        assert!(!pinch.recognize(1.02));
+        assert!(!pinch.recognize(1.03));
+        assert!(pinch.recognize(1.1));
+        assert_eq!(pinch.action, SwipeAction::Binding(Action::OpenOverview));
+    }
+
+    #[test]
     fn pinch_sensitivity_and_threshold_are_snapshotted() {
         let mut config = Gestures::default();
         let mut pinch = TouchpadPinch::new("a".into(), 4, &config, false);
         config.pinch_sensitivity = 1.;
         assert_eq!(pinch.sensitivity, 2.5);
         assert!(!pinch.recognize(1.005));
+        assert!(!pinch.recognize(1.02));
         assert!(pinch.recognize(1.02));
         assert_eq!(pinch.action, SwipeAction::Binding(Action::OpenOverview));
         let mut pinch = TouchpadPinch::new("a".into(), 4, &config, false);
+        assert!(!pinch.recognize(1. / 1.02));
         assert!(pinch.recognize(1. / 1.02));
         assert_eq!(pinch.action, SwipeAction::Binding(Action::OpenGridOverview));
         assert_eq!(pinch.sensitivity, 1.);
@@ -258,7 +313,8 @@ mod tests {
         let mut horizontal = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
         assert!(!horizontal.recognize(4., 0.));
         assert_eq!(horizontal.action, SwipeAction::Pending);
-        assert!(horizontal.recognize(4., 0.));
+        assert!(!horizontal.recognize(4., 0.));
+        assert!(horizontal.recognize(1., 0.));
         assert_eq!(
             horizontal.action,
             SwipeAction::Binding(Action::FocusColumnLeft)
@@ -279,7 +335,8 @@ mod tests {
             SwipeAction::Forwarded
         );
         let mut left = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
-        assert!(left.recognize(-8., 0.));
+        assert!(!left.recognize(-8., 0.));
+        assert!(left.recognize(-1., 0.));
         assert_eq!(left.action, SwipeAction::Binding(Action::FocusColumnRight));
     }
 

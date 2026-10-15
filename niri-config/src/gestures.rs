@@ -76,6 +76,8 @@ mod swipe_tests {
             "pinch-threshold 51",
             "pinch-sensitivity 0",
             "pinch-sensitivity 11",
+            "view-transition-max-speed 0",
+            "view-transition-max-speed 21",
         ] {
             assert!(
                 Config::parse_mem(&format!("gestures {{ {body}; }}")).is_err(),
@@ -113,10 +115,13 @@ mod swipe_tests {
 
     #[test]
     fn pinch_tuning_parses() {
-        let config =
-            Config::parse_mem("gestures { pinch-threshold 2; pinch-sensitivity 3.5; }").unwrap();
+        let config = Config::parse_mem(
+            "gestures { pinch-threshold 2; pinch-sensitivity 3.5; view-transition-max-speed 3; }",
+        )
+        .unwrap();
         assert_eq!(config.gestures.pinch_threshold, 2.);
         assert_eq!(config.gestures.pinch_sensitivity, 3.5);
+        assert_eq!(config.gestures.view_transition_max_speed, 3.);
     }
 }
 
@@ -132,6 +137,7 @@ pub struct Gestures {
     pub swipe_threshold: f64,
     pub pinch_threshold: f64,
     pub pinch_sensitivity: f64,
+    pub view_transition_max_speed: f64,
     pub swipes: Vec<SwipeBinding>,
     pub pinches: Vec<PinchBinding>,
 }
@@ -149,6 +155,7 @@ impl Default for Gestures {
             swipe_threshold: 8.,
             pinch_threshold: 1.,
             pinch_sensitivity: 2.5,
+            view_transition_max_speed: 4.,
             swipes: vec![
                 SwipeBinding {
                     fingers: 4,
@@ -310,6 +317,8 @@ pub struct GesturesPart {
     pub pinch_threshold: Option<FloatOrInt<1, 50>>,
     #[knuffel(child, unwrap(argument))]
     pub pinch_sensitivity: Option<FloatOrInt<1, 10>>,
+    #[knuffel(child, unwrap(argument))]
+    pub view_transition_max_speed: Option<FloatOrInt<1, 20>>,
     #[knuffel(children(name = "swipe"))]
     pub swipes: Vec<SwipeBinding>,
     #[knuffel(children(name = "pinch"))]
@@ -333,6 +342,7 @@ impl MergeWith<GesturesPart> for Gestures {
         );
         merge!((self, part), swipe_threshold);
         merge!((self, part), pinch_threshold, pinch_sensitivity);
+        merge!((self, part), view_transition_max_speed);
         for binding in &part.swipes {
             self.swipes
                 .retain(|b| b.fingers != binding.fingers || b.direction != binding.direction);

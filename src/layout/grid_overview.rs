@@ -847,6 +847,15 @@ impl<W: LayoutElement> GridOverview<W> {
     }
 
     pub fn advance_animations(&mut self) {
+        if let Some(OverviewProgress::Gesture(g)) = &mut self.progress {
+            g.advance(self.clock.now_unadjusted());
+            if g.settling && g.value == g.target {
+                self.progress = self.open.then_some(OverviewProgress::Open);
+                if self.open && self.rearrange_anim.is_none() && self.focus_boost_anim.is_none() {
+                    self.sync_entries_to_layout();
+                }
+            }
+        }
         if let Some(OverviewProgress::Animation(anim)) = &mut self.progress {
             if anim.is_done() {
                 self.progress = if self.open {

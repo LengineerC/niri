@@ -3647,6 +3647,18 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn resize_edges_under(&self, pos: Point<f64, Logical>) -> Option<ResizeEdge> {
+        self.resize_edges_under_mode(pos, false)
+    }
+
+    pub(super) fn resize_corner_under(&self, pos: Point<f64, Logical>) -> Option<ResizeEdge> {
+        self.resize_edges_under_mode(pos, true)
+    }
+
+    fn resize_edges_under_mode(
+        &self,
+        pos: Point<f64, Logical>,
+        corner: bool,
+    ) -> Option<ResizeEdge> {
         self.tiles_with_render_positions()
             .find_map(|(tile, tile_pos, visible)| {
                 // This logic should be consistent with window_under() in when it returns Some vs.
@@ -3659,6 +3671,20 @@ impl<W: LayoutElement> Workspace<W> {
 
                 if tile.hit(pos_within_tile).is_some() {
                     let size = tile.tile_size().to_f64();
+
+                    if corner {
+                        return Some(
+                            (if pos_within_tile.x < size.w / 2. {
+                                ResizeEdge::LEFT
+                            } else {
+                                ResizeEdge::RIGHT
+                            }) | (if pos_within_tile.y < size.h / 2. {
+                                ResizeEdge::TOP
+                            } else {
+                                ResizeEdge::BOTTOM
+                            }),
+                        );
+                    }
 
                     let mut edges = ResizeEdge::empty();
                     if pos_within_tile.x < size.w / 3. {

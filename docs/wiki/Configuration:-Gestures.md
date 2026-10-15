@@ -16,6 +16,7 @@ gestures {
     swipe-threshold 8
     pinch-threshold 1
     pinch-sensitivity 2.5
+    view-transition-max-speed 4
     swipe fingers=4 direction="left" { focus-column-right; }
     swipe fingers=4 direction="right" { focus-column-left; }
     pinch fingers=4 direction="in" { open-grid-overview; }
@@ -57,6 +58,7 @@ The built-in swipes are configurable and retain their finger-following animation
 Use `swipe fingers=4 direction="up" { open-overview; }` to bind a direction to any action accepted in `binds`.
 Each binding takes exactly one action. Supported counts are `3`–`5`; directions are `left`, `right`, `up`, and `down`.
 Directions refer to physical finger movement and do not invert with `natural-scroll`.
+Near-diagonal startup motion is left undecided until one axis is clearly dominant (at least 1.35 times the other). Small movements require a second consistent directional sample; a clear movement over twice the threshold can be recognized immediately. This avoids locking the axis based on an incidental first movement.
 The built-in scrolling gestures continue to honor natural scrolling as before.
 
 Bindings take precedence over built-in gestures in that direction. Otherwise, workspace switching takes precedence over view scrolling, then overview.
@@ -67,7 +69,7 @@ Later bindings with the same finger count and direction replace earlier bindings
 
 When any binding or built-in gesture uses a finger count, niri owns the complete gesture sequence for that count, including unmapped directions.
 Unused finger counts are forwarded to applications. Compositor swipes are suppressed while locked, in the screenshot/MRU/portal picker UI, or when starting during a pointer grab.
-Ordinary two-finger scrolling is unchanged. Holding Mod while moving two fingers resizes the window under the pointer, using the same edge selection as Mod + right mouse drag. This takes precedence over touchpad bindings and the wheel-binding fallback; actual mouse wheel bindings remain unchanged. Release the fingers or Mod to finish resizing. Natural scrolling does not reverse resize direction.
+Ordinary two-finger scrolling is unchanged. Holding Mod while moving two fingers resizes the window under the pointer using the nearest corner, so both width and height can change even when the pointer starts near the middle of an edge or window. Mouse right-button resizing keeps its original edge selection. This takes precedence over touchpad bindings and the wheel-binding fallback; actual mouse wheel bindings remain unchanged. Release the fingers or Mod to finish resizing. Natural scrolling does not reverse resize direction. libinput must supply both scroll axes; niri cannot recover motion already suppressed by the device's scroll-axis locking.
 
 ### Touchpad pinches
 
@@ -76,6 +78,10 @@ With the default paired view-opening bindings, the opposite pinch exits the open
 Use `pinch fingers=4 direction="in" { open-grid-overview; }` or `direction="out"` for spreading the fingers. Finger counts `3`–`5` and exactly one action are supported. The defaults are four-finger pinch-in for grid overview and pinch-out for overview. A physical left swipe focuses the window/column on the right, and a right swipe focuses the one on the left, following content-dragging direction. These focus actions also work in the floating layout. Explicit bindings still override these defaults.
 
 `pinch-threshold` controls recognition in percent of logarithmic scale (default `1`, range `1`–`50`); the default is approximately a 1% scale change. `pinch-sensitivity` scales view-transition progress (default `2.5`, range `1`–`10`); larger values need less movement. With the default sensitivity, approximately 10% scale change is enough to settle toward the new view state on release, and a factor of 0.82 inward or 1.22 outward spans a full transition. These settings are separate from `input.touchpad.pinch-sensitivity`, which affects client application zoom only.
+
+Small pinches require consistent direction over two samples. Clear scale changes of at least 4% can be recognized immediately. When substantial translation accompanies less than 6% logarithmic scale change, niri waits for stronger pinch evidence instead of opening a view from finger-placement drift. These checks operate on gestures reported by libinput, not raw finger contacts.
+
+`view-transition-max-speed` caps the displayed progress of gesture-driven grid/overview transitions (default `4`, range `1`–`20`, in full transitions per second). At `4`, a full-range transition takes at least 250 ms; use `3` for at least 333 ms. Input targets remain responsive, while displayed progress catches up at the capped rate, including after release or cancellation. Release decisions use the input target, not the lagging display. This applies to configured swipe/pinch view actions and the built-in overview gesture; keyboard-triggered animations retain their existing animation settings.
 
 Other actions run once on release. Direction selection stays fixed until release, so reversing a pinch retreats the same transition. Unbound finger counts, including normal two-finger application zoom, are forwarded to clients. The touchpad must report the requested finger count and pinch gestures through libinput.
 

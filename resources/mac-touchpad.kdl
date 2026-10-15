@@ -16,6 +16,8 @@ gestures {
     swipe-threshold 8
     pinch-threshold 1
     pinch-sensitivity 2.5
+    // Maximum displayed gesture transition rate: full range in at least 250 ms.
+    view-transition-max-speed 4
 
     swipe fingers=4 direction="left" { focus-column-right; }
     swipe fingers=4 direction="right" { focus-column-left; }
@@ -25,7 +27,7 @@ gestures {
     pinch fingers=4 direction="out" { open-overview; }
     // Grid shows the workspace's windows, not only the current application's windows.
 
-    // Mod + two-finger dragging resizes the window under the pointer.
+    // Mod + two-finger dragging resizes both axes using the nearest window corner.
     // Remove old four-finger up/down swipe bindings from your config: they
     // otherwise take precedence over workspace switching.
 }

@@ -1961,6 +1961,7 @@ mod tests {
                 swipe_threshold: 8.0,
                 pinch_threshold: 1.0,
                 pinch_sensitivity: 2.5,
+                view_transition_max_speed: 4.0,
                 swipes: [
                     SwipeBinding {
                         fingers: 4,

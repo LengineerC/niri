@@ -586,6 +586,47 @@ pub(super) struct OverviewGesture {
     start: f64,
     /// Current progress.
     value: f64,
+    target: f64,
+    last_update: Duration,
+    max_speed: f64,
+    settling: bool,
+    restore_open: bool,
+}
+
+impl OverviewGesture {
+    fn new(value: f64, now: Duration, max_speed: f64, restore_open: bool) -> Self {
+        Self {
+            tracker: SwipeTracker::new(),
+            start: value,
+            value,
+            target: value,
+            last_update: now,
+            max_speed,
+            settling: false,
+            restore_open,
+        }
+    }
+
+    fn advance(&mut self, now: Duration) {
+        let step = now.saturating_sub(self.last_update).as_secs_f64() * self.max_speed;
+        self.last_update = now;
+        let distance = self.target - self.value;
+        if distance.abs() <= step {
+            self.value = self.target;
+        } else {
+            self.value += distance.signum() * step;
+        }
+    }
+
+    fn set_target(&mut self, target: f64, now: Duration) {
+        // Advance the previous target first; idle time is never credited to a new jump.
+        self.advance(now);
+        self.target = target;
+    }
+
+    fn ongoing(&self) -> bool {
+        self.settling || self.value != self.target
+    }
 }
 
 #[derive(Debug)]
@@ -734,7 +775,11 @@ impl OverviewProgress {
     }
 
     fn is_animation(&self) -> bool {
-        matches!(self, OverviewProgress::Animation(_))
+        match self {
+            Self::Animation(_) => true,
+            Self::Gesture(g) => g.ongoing(),
+            Self::Open => false,
+        }
     }
 }
 
@@ -2884,6 +2929,14 @@ impl<W: LayoutElement> Layout<W> {
         mon.resize_edges_under(pos_within_output)
     }
 
+    pub fn resize_corner_under(
+        &self,
+        output: &Output,
+        pos: Point<f64, Logical>,
+    ) -> Option<ResizeEdge> {
+        self.monitor_for_output(output)?.resize_corner_under(pos)
+    }
+
     pub fn workspace_under(
         &self,
         extended_bounds: bool,
@@ -3225,6 +3278,12 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if let Some(OverviewProgress::Gesture(g)) = &mut self.overview_progress {
+            g.advance(self.clock.now_unadjusted());
+            if g.settling && g.value == g.target {
+                self.overview_progress = self.overview_open.then_some(OverviewProgress::Open);
+            }
+        }
         if let Some(OverviewProgress::Animation(anim)) = &mut self.overview_progress {
             if anim.is_done() {
                 if self.overview_open {
@@ -4493,14 +4552,16 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn overview_gesture_begin(&mut self) {
+        let restore_open = self.overview_open;
         self.overview_open = true;
 
         let value = self.overview_progress.take().map_or(0., |p| p.value());
-        let gesture = OverviewGesture {
-            tracker: SwipeTracker::new(),
-            start: value,
+        let gesture = OverviewGesture::new(
             value,
-        };
+            self.clock.now_unadjusted(),
+            self.options.gestures.view_transition_max_speed,
+            restore_open,
+        );
         self.overview_progress = Some(OverviewProgress::Gesture(gesture));
 
         self.set_monitors_overview_state();
@@ -4533,11 +4594,12 @@ impl<W: LayoutElement> Layout<W> {
                 ws.prepare_grid_gesture();
                 if let Some(go) = &mut ws.grid_overview {
                     let value = go.progress_value();
-                    go.progress = Some(OverviewProgress::Gesture(OverviewGesture {
-                        tracker: SwipeTracker::new(),
-                        start: value,
+                    go.progress = Some(OverviewProgress::Gesture(OverviewGesture::new(
                         value,
-                    }));
+                        go.clock.now_unadjusted(),
+                        go.options.gestures.view_transition_max_speed,
+                        go.open,
+                    )));
                 }
             }
         }
@@ -4559,12 +4621,15 @@ impl<W: LayoutElement> Layout<W> {
             for ws in self.workspaces_mut() {
                 if let Some(go) = &mut ws.grid_overview {
                     if let Some(OverviewProgress::Gesture(g)) = &mut go.progress {
-                        g.value = (g.start + amount).clamp(0., 1.);
+                        g.set_target((g.start + amount).clamp(0., 1.), go.clock.now_unadjusted());
                     }
                 }
             }
         } else if let Some(OverviewProgress::Gesture(g)) = &mut self.overview_progress {
-            g.value = (g.start + amount).clamp(0., 1.);
+            g.set_target(
+                (g.start + amount).clamp(0., 1.),
+                self.clock.now_unadjusted(),
+            );
             self.set_monitors_overview_state();
         }
     }
@@ -4585,36 +4650,47 @@ impl<W: LayoutElement> Layout<W> {
                     .workspaces
                     .iter()
                     .find_map(|ws| match ws.grid_overview.as_ref()?.progress.as_ref()? {
-                        OverviewProgress::Gesture(g) => Some(g.value),
+                        OverviewProgress::Gesture(g) => Some(g.target),
                         _ => None,
                     })
                     .unwrap_or(f64::from(was_open) + gesture.amount);
                 let open = if cancelled { was_open } else { value >= 0.5 };
+                let starts: Vec<_> = mon
+                    .workspaces
+                    .iter()
+                    .enumerate()
+                    .filter_map(
+                        |(idx, ws)| match ws.grid_overview.as_ref()?.progress.as_ref()? {
+                            OverviewProgress::Gesture(g) => Some((idx, g.value)),
+                            _ => None,
+                        },
+                    )
+                    .collect();
                 mon.set_grid_overview_open(open);
-                for ws in &mut mon.workspaces {
+                for (idx, value) in starts {
+                    let ws = &mut mon.workspaces[idx];
                     if let Some(go) = &mut ws.grid_overview {
-                        if let Some(OverviewProgress::Gesture(g)) = &go.progress {
-                            go.progress = Some(OverviewProgress::Animation(Animation::new(
-                                go.clock.clone(),
-                                g.value,
-                                f64::from(open),
-                                0.,
-                                go.options.animations.grid_overview_open_close.0,
-                            )));
-                        }
+                        let mut g = OverviewGesture::new(
+                            value,
+                            go.clock.now_unadjusted(),
+                            go.options.gestures.view_transition_max_speed,
+                            was_open,
+                        );
+                        g.target = f64::from(open);
+                        g.settling = true;
+                        go.progress = Some(OverviewProgress::Gesture(g));
                     }
                 }
             }
-        } else if let Some(OverviewProgress::Gesture(g)) = &self.overview_progress {
-            let to = if cancelled { g.start } else { g.value }.round();
+        } else if let Some(OverviewProgress::Gesture(g)) = &mut self.overview_progress {
+            let to = if cancelled {
+                f64::from(g.restore_open)
+            } else {
+                g.target.round()
+            };
             self.overview_open = to == 1.;
-            self.overview_progress = Some(OverviewProgress::Animation(Animation::new(
-                self.clock.clone(),
-                g.value,
-                to,
-                0.,
-                self.options.animations.overview_open_close.0,
-            )));
+            g.set_target(to, self.clock.now_unadjusted());
+            g.settling = true;
             self.set_monitors_overview_state();
         }
     }
@@ -4631,11 +4707,11 @@ impl<W: LayoutElement> Layout<W> {
         let new_value = gesture.start + pos;
         let new_value = OVERVIEW_GESTURE_RUBBER_BAND.clamp(0., 1., new_value);
 
-        if gesture.value == new_value {
+        if gesture.target == new_value {
             return Some(false);
         }
 
-        gesture.value = new_value;
+        gesture.set_target(new_value, self.clock.now_unadjusted());
         self.set_monitors_overview_state();
 
         Some(true)
@@ -4652,24 +4728,14 @@ impl<W: LayoutElement> Layout<W> {
 
         let total_height = OVERVIEW_GESTURE_MOVEMENT;
 
-        let mut velocity = gesture.tracker.velocity() / total_height;
-        let current_pos = gesture.tracker.pos() / total_height;
         let pos = gesture.tracker.projected_end_pos() / total_height;
 
         let new_value = gesture.start + pos;
         let new_value = new_value.clamp(0., 1.).round();
 
-        velocity *=
-            OVERVIEW_GESTURE_RUBBER_BAND.clamp_derivative(0., 1., gesture.start + current_pos);
-
         self.overview_open = new_value == 1.;
-        self.overview_progress = Some(OverviewProgress::Animation(Animation::new(
-            self.clock.clone(),
-            gesture.value,
-            new_value,
-            velocity,
-            self.options.animations.overview_open_close.0,
-        )));
+        gesture.set_target(new_value, now);
+        gesture.settling = true;
 
         self.set_monitors_overview_state();
 

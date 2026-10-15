@@ -3628,7 +3628,7 @@ impl State {
                     {
                         let location = pointer.current_location();
                         let edges = self.niri.output_under(location).and_then(|(output, pos)| {
-                            self.niri.layout.resize_edges_under(output, pos)
+                            self.niri.layout.resize_corner_under(output, pos)
                         });
                         let window = self.niri.window_under(location).map(|w| w.window.clone());
                         if let (Some(edges), Some(window)) = (edges, window) {
@@ -4947,6 +4947,8 @@ impl State {
             self.finish_touchpad_pinch(event.time(), true);
             return;
         }
+        pinch.translation.0 += event.delta_x();
+        pinch.translation.1 += event.delta_y();
         if pinch.recognize(event.scale()) {
             // Resolve on the same output that the bound action will operate on.
             if matches!(

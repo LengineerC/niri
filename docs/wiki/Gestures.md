@@ -72,7 +72,7 @@ You can configure the finger count or replace individual swipe directions with a
 
 #### Two-finger Resize
 
-Hold Mod and drag two fingers to resize the window under the pointer, like Mod + right mouse drag. The edge/corner is chosen from the initial pointer position. Release Mod or lift the fingers to finish. This replaces the old Mod + two-finger fallback to wheel bindings, without changing actual mouse wheel bindings.
+Hold Mod and drag two fingers to resize the window under the pointer. The nearest corner is chosen from the initial pointer position so diagonal motion can change both width and height. Mod + right mouse drag retains its original edge/corner selection. Release Mod or lift the fingers to finish. This replaces the old Mod + two-finger fallback to wheel bindings, without changing actual mouse wheel bindings.
 
 #### Three-finger Drag
 
