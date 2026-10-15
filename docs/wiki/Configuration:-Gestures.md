@@ -13,9 +13,11 @@ gestures {
     workspace-switch-axis "vertical"
     view-scroll-fingers 0
     overview-fingers 0
-    swipe-threshold 16
-    swipe fingers=4 direction="left" { focus-column-left; }
-    swipe fingers=4 direction="right" { focus-column-right; }
+    swipe-threshold 8
+    pinch-threshold 1
+    pinch-sensitivity 2.5
+    swipe fingers=4 direction="left" { focus-column-right; }
+    swipe fingers=4 direction="right" { focus-column-left; }
     pinch fingers=4 direction="in" { open-grid-overview; }
     pinch fingers=4 direction="out" { open-overview; }
 
@@ -50,7 +52,7 @@ The built-in swipes are configurable and retain their finger-following animation
 - `view-scroll-fingers`: finger count for scrolling the tiling view horizontally (default `0`, disabled).
 - `overview-fingers`: finger count for opening/closing overview vertically (default `0`, disabled).
 - Set a finger count to `0` to disable that built-in gesture. Use `3`, `4`, or `5` for touchpads capable of reporting those gestures.
-- `swipe-threshold`: accumulated movement needed to choose a direction, in libinput's unaccelerated gesture units (default `16`, range `1`–`1000`).
+- `swipe-threshold`: accumulated movement needed to choose a direction, in libinput's unaccelerated gesture units (default `8`, range `1`–`1000`). Smaller values recognize swipes sooner. Movement accumulated before recognition is included in the first interactive scrolling update.
 
 Use `swipe fingers=4 direction="up" { open-overview; }` to bind a direction to any action accepted in `binds`.
 Each binding takes exactly one action. Supported counts are `3`–`5`; directions are `left`, `right`, `up`, and `down`.
@@ -71,9 +73,11 @@ Ordinary two-finger scrolling is unchanged. Holding Mod while moving two fingers
 
 With the default paired view-opening bindings, the opposite pinch exits the open view first: spread four fingers to leave grid overview, or pinch inward to leave overview. Exit transitions follow the fingers; cancellation keeps the original view open. This uses the opposite-direction binding for the same finger count, so swapping the two opening bindings also swaps the exit directions. Explicit non-opening actions (including close/toggle actions) retain their configured meaning.
 
-Use `pinch fingers=4 direction="in" { open-grid-overview; }` or `direction="out"` for spreading the fingers. Finger counts `3`–`5` and exactly one action are supported. The defaults are four-finger pinch-in for grid overview, pinch-out for overview, and four-finger left/right swipes for left/right window focus (`focus-column-left` / `focus-column-right`, also supported by the floating layout).
+Use `pinch fingers=4 direction="in" { open-grid-overview; }` or `direction="out"` for spreading the fingers. Finger counts `3`–`5` and exactly one action are supported. The defaults are four-finger pinch-in for grid overview and pinch-out for overview. A physical left swipe focuses the window/column on the right, and a right swipe focuses the one on the left, following content-dragging direction. These focus actions also work in the floating layout. Explicit bindings still override these defaults.
 
-Pinches are recognized after a 3% scale change. View transitions follow absolute pinch scale (a scale factor of approximately 0.61 inward or 1.65 outward spans a complete transition). Other actions run once on release. Direction selection stays fixed until release, so reversing a pinch retreats the same transition. Unbound finger counts, including normal two-finger application zoom, are forwarded to clients. The touchpad must report the requested finger count and pinch gestures through libinput.
+`pinch-threshold` controls recognition in percent of logarithmic scale (default `1`, range `1`–`50`); the default is approximately a 1% scale change. `pinch-sensitivity` scales view-transition progress (default `2.5`, range `1`–`10`); larger values need less movement. With the default sensitivity, approximately 10% scale change is enough to settle toward the new view state on release, and a factor of 0.82 inward or 1.22 outward spans a full transition. These settings are separate from `input.touchpad.pinch-sensitivity`, which affects client application zoom only.
+
+Other actions run once on release. Direction selection stays fixed until release, so reversing a pinch retreats the same transition. Unbound finger counts, including normal two-finger application zoom, are forwarded to clients. The touchpad must report the requested finger count and pinch gestures through libinput.
 
 Pinch bindings merge by finger count and direction, just like swipe bindings. Existing explicit swipe bindings still override the new defaults: remove old four-finger up/down bindings to use vertical workspace switching.
 
@@ -91,9 +95,11 @@ gestures {
     workspace-switch-axis "vertical"
     view-scroll-fingers 0
     overview-fingers 0
-    swipe-threshold 24
-    swipe fingers=4 direction="left" { focus-column-left; }
-    swipe fingers=4 direction="right" { focus-column-right; }
+    swipe-threshold 8
+    pinch-threshold 1
+    pinch-sensitivity 2.5
+    swipe fingers=4 direction="left" { focus-column-right; }
+    swipe fingers=4 direction="right" { focus-column-left; }
     pinch fingers=4 direction="in" { open-grid-overview; }
     pinch fingers=4 direction="out" { open-overview; }
 }

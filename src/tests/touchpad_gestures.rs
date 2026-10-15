@@ -195,6 +195,19 @@ fn opposite_pinch_closes_view_instead_of_opening_other_view() {
 }
 
 #[test]
+fn modest_pinch_can_open_and_close_overview() {
+    let mut f = fixture();
+    pinch_begin(&mut f, 4);
+    pinch_update(&mut f, 1.12);
+    pinch_end(&mut f, false);
+    assert!(f.niri().layout.is_overview_open());
+    pinch_begin(&mut f, 4);
+    pinch_update(&mut f, 0.88);
+    pinch_end(&mut f, false);
+    assert!(!f.niri().layout.is_overview_open());
+}
+
+#[test]
 fn cancelling_opposite_pinch_keeps_original_view_open() {
     for (grid, enter, leave) in [(true, 0.55, 1.8), (false, 1.8, 0.55)] {
         let mut f = fixture();
@@ -228,7 +241,7 @@ fn pinch_short_or_removed_does_not_dispatch() {
     let mut f = fixture();
     f.niri().config.borrow_mut().gestures.pinches[0].action = Action::TestAction;
     pinch_begin(&mut f, 4);
-    pinch_update(&mut f, 0.99);
+    pinch_update(&mut f, 0.995);
     pinch_end(&mut f, false);
     pinch_begin(&mut f, 4);
     pinch_update(&mut f, 0.7);

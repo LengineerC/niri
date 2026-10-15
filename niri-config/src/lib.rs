@@ -1958,17 +1958,19 @@ mod tests {
                 workspace_switch_axis: Vertical,
                 view_scroll_fingers: 0,
                 overview_fingers: 0,
-                swipe_threshold: 16.0,
+                swipe_threshold: 8.0,
+                pinch_threshold: 1.0,
+                pinch_sensitivity: 2.5,
                 swipes: [
                     SwipeBinding {
                         fingers: 4,
                         direction: Left,
-                        action: FocusColumnLeft,
+                        action: FocusColumnRight,
                     },
                     SwipeBinding {
                         fingers: 4,
                         direction: Right,
-                        action: FocusColumnRight,
+                        action: FocusColumnLeft,
                     },
                 ],
                 pinches: [

@@ -72,6 +72,10 @@ mod swipe_tests {
             "swipe fingers=4 direction=\"up\" {}",
             "swipe fingers=4 direction=\"up\" { open-overview; close-overview; }",
             "swipe-threshold 0",
+            "pinch-threshold 0",
+            "pinch-threshold 51",
+            "pinch-sensitivity 0",
+            "pinch-sensitivity 11",
         ] {
             assert!(
                 Config::parse_mem(&format!("gestures {{ {body}; }}")).is_err(),
@@ -106,6 +110,14 @@ mod swipe_tests {
             );
         }
     }
+
+    #[test]
+    fn pinch_tuning_parses() {
+        let config =
+            Config::parse_mem("gestures { pinch-threshold 2; pinch-sensitivity 3.5; }").unwrap();
+        assert_eq!(config.gestures.pinch_threshold, 2.);
+        assert_eq!(config.gestures.pinch_sensitivity, 3.5);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +130,8 @@ pub struct Gestures {
     pub view_scroll_fingers: u8,
     pub overview_fingers: u8,
     pub swipe_threshold: f64,
+    pub pinch_threshold: f64,
+    pub pinch_sensitivity: f64,
     pub swipes: Vec<SwipeBinding>,
     pub pinches: Vec<PinchBinding>,
 }
@@ -132,17 +146,19 @@ impl Default for Gestures {
             workspace_switch_axis: SwipeAxis::Vertical,
             view_scroll_fingers: 0,
             overview_fingers: 0,
-            swipe_threshold: 16.,
+            swipe_threshold: 8.,
+            pinch_threshold: 1.,
+            pinch_sensitivity: 2.5,
             swipes: vec![
                 SwipeBinding {
                     fingers: 4,
                     direction: SwipeDirection::Left,
-                    action: crate::Action::FocusColumnLeft,
+                    action: crate::Action::FocusColumnRight,
                 },
                 SwipeBinding {
                     fingers: 4,
                     direction: SwipeDirection::Right,
-                    action: crate::Action::FocusColumnRight,
+                    action: crate::Action::FocusColumnLeft,
                 },
             ],
             pinches: vec![
@@ -290,6 +306,10 @@ pub struct GesturesPart {
     pub overview_fingers: Option<u8>,
     #[knuffel(child, unwrap(argument))]
     pub swipe_threshold: Option<FloatOrInt<1, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub pinch_threshold: Option<FloatOrInt<1, 50>>,
+    #[knuffel(child, unwrap(argument))]
+    pub pinch_sensitivity: Option<FloatOrInt<1, 10>>,
     #[knuffel(children(name = "swipe"))]
     pub swipes: Vec<SwipeBinding>,
     #[knuffel(children(name = "pinch"))]
@@ -312,6 +332,7 @@ impl MergeWith<GesturesPart> for Gestures {
             overview_fingers
         );
         merge!((self, part), swipe_threshold);
+        merge!((self, part), pinch_threshold, pinch_sensitivity);
         for binding in &part.swipes {
             self.swipes
                 .retain(|b| b.fingers != binding.fingers || b.direction != binding.direction);

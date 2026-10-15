@@ -60,7 +60,7 @@ The finger count and axis can be changed in the [gesture configuration](./Config
 
 #### Horizontal View Movement
 
-Four-finger horizontal swipes focus the window/column to the left or right. Continuous horizontal view movement can be enabled with `view-scroll-fingers` after overriding the corresponding action bindings.
+Four-finger horizontal swipes follow content-dragging direction: swipe left to focus the window/column on the right, and right to focus the one on the left. Continuous horizontal view movement can be enabled with `view-scroll-fingers` after overriding the corresponding action bindings.
 
 #### Open and Close the Overview
 

@@ -13,10 +13,12 @@ gestures {
     workspace-switch-axis "vertical"
     view-scroll-fingers 0
     overview-fingers 0
-    swipe-threshold 24
+    swipe-threshold 8
+    pinch-threshold 1
+    pinch-sensitivity 2.5
 
-    swipe fingers=4 direction="left" { focus-column-left; }
-    swipe fingers=4 direction="right" { focus-column-right; }
+    swipe fingers=4 direction="left" { focus-column-right; }
+    swipe fingers=4 direction="right" { focus-column-left; }
     // View transitions follow the fingers, including reversing before release.
     // In grid, spread to exit; in overview, pinch inward to exit.
     pinch fingers=4 direction="in" { open-grid-overview; }

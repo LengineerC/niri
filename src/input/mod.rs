@@ -4716,8 +4716,14 @@ impl State {
             delta_x = libinput_event.dx_unaccelerated();
             delta_y = libinput_event.dy_unaccelerated();
         }
-        let uninverted_delta_y = delta_y;
         let recognized = swipe.recognize(delta_x, delta_y);
+        // Include the movement spent choosing a direction in the first update,
+        // rather than making the user repeat that distance after recognition.
+        if recognized {
+            delta_x = swipe.cumulative.0;
+            delta_y = swipe.cumulative.1;
+        }
+        let uninverted_delta_y = delta_y;
         let device = event.device();
         if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
             if device.config_scroll_natural_scroll_enabled() {
@@ -4970,7 +4976,7 @@ impl State {
                 } else {
                     1.
                 };
-                let amount = event.scale().ln() * sign / 0.5;
+                let amount = event.scale().ln() * sign * pinch.sensitivity / 0.5;
                 self.niri
                     .layout
                     .bound_view_gesture_update(grid, if opening { amount } else { -amount });

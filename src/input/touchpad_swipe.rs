@@ -111,6 +111,8 @@ pub struct TouchpadPinch {
     pub bindings: Vec<PinchBinding>,
     pub action: SwipeAction,
     pub direction: Option<PinchDirection>,
+    threshold: f64,
+    pub sensitivity: f64,
 }
 
 impl TouchpadPinch {
@@ -162,6 +164,8 @@ impl TouchpadPinch {
             bindings,
             action,
             direction: None,
+            threshold: config.pinch_threshold / 100.,
+            sensitivity: config.pinch_sensitivity,
         }
     }
 
@@ -169,7 +173,7 @@ impl TouchpadPinch {
         if self.action != SwipeAction::Pending
             || !scale.is_finite()
             || scale <= 0.
-            || (scale - 1.).abs() < 0.03
+            || scale.ln().abs() < self.threshold
         {
             return false;
         }
@@ -235,19 +239,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pinch_sensitivity_and_threshold_are_snapshotted() {
+        let mut config = Gestures::default();
+        let mut pinch = TouchpadPinch::new("a".into(), 4, &config, false);
+        config.pinch_sensitivity = 1.;
+        assert_eq!(pinch.sensitivity, 2.5);
+        assert!(!pinch.recognize(1.005));
+        assert!(pinch.recognize(1.02));
+        assert_eq!(pinch.action, SwipeAction::Binding(Action::OpenOverview));
+        let mut pinch = TouchpadPinch::new("a".into(), 4, &config, false);
+        assert!(pinch.recognize(1. / 1.02));
+        assert_eq!(pinch.action, SwipeAction::Binding(Action::OpenGridOverview));
+        assert_eq!(pinch.sensitivity, 1.);
+    }
+
+    #[test]
     fn defaults_use_four_finger_workspaces_and_window_switching() {
         let mut horizontal = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
         assert!(!horizontal.recognize(4., 0.));
         assert_eq!(horizontal.action, SwipeAction::Pending);
-        assert!(horizontal.recognize(12., 0.));
+        assert!(horizontal.recognize(4., 0.));
         assert_eq!(
             horizontal.action,
-            SwipeAction::Binding(Action::FocusColumnRight)
+            SwipeAction::Binding(Action::FocusColumnLeft)
         );
         assert!(!horizontal.recognize(0., 100.));
         assert_eq!(
             horizontal.action,
-            SwipeAction::Binding(Action::FocusColumnRight)
+            SwipeAction::Binding(Action::FocusColumnLeft)
         );
         let mut vertical = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
         assert!(vertical.recognize(0., -16.));
@@ -259,6 +278,9 @@ mod tests {
             TouchpadSwipe::new("a".into(), 3, Gestures::default(), false).action,
             SwipeAction::Forwarded
         );
+        let mut left = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
+        assert!(left.recognize(-8., 0.));
+        assert_eq!(left.action, SwipeAction::Binding(Action::FocusColumnRight));
     }
 
     #[test]
