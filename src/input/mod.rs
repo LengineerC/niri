@@ -3,6 +3,8 @@ use std::collections::hash_map::Entry;
 use std::collections::HashSet;
 use std::time::Duration;
 
+use niri_config::gestures::SwipeAxis;
+
 use calloop::timer::{TimeoutAction, Timer};
 use input::event::gesture::GestureEventCoordinates as _;
 use niri_config::{
@@ -68,6 +70,9 @@ pub mod scroll_tracker;
 pub mod spatial_movement_grab;
 pub mod swipe_tracker;
 pub mod touch_overview_grab;
+pub mod touchpad_swipe;
+
+use touchpad_swipe::{configure_three_finger_drag, SwipeAction, TouchpadSwipe};
 
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
 
@@ -288,6 +293,14 @@ impl State {
     }
 
     fn on_device_removed(&mut self, device: impl Device) {
+        if self
+            .niri
+            .touchpad_swipe
+            .as_ref()
+            .is_some_and(|s| s.device_id == device.id())
+        {
+            self.finish_touchpad_swipe(smithay::backend::input::InputTime::now(), true);
+        }
         if device.has_capability(DeviceCapability::TabletTool) {
             let tablet_seat = self.niri.seat.tablet_seat();
 
@@ -4476,40 +4489,48 @@ impl State {
         }
     }
 
+    fn touchpad_swipes_blocked(&self) -> bool {
+        #[cfg(feature = "xdp-gnome-screencast")]
+        if self.niri.screen_cast_picker.is_open() {
+            return true;
+        }
+        self.niri.is_locked()
+            || self.niri.window_mru_ui.is_open()
+            || self.niri.screenshot_ui.is_open()
+    }
+
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
-        if self.niri.window_mru_ui.is_open() {
-            // Don't start swipe gestures while in the MRU.
-            return;
-        }
-
-        if event.fingers() == 3 {
-            self.niri.gesture_swipe_3f_cumulative = Some((0., 0.));
-
-            // We handled this event.
-            return;
-        } else if event.fingers() == 4 {
-            self.niri.layout.overview_gesture_begin();
-            self.niri.queue_redraw_all();
-
-            // We handled this event.
-            return;
-        }
-
-        let serial = SERIAL_COUNTER.next_serial();
+        self.finish_touchpad_swipe(event.time(), true);
         let pointer = self.niri.seat.get_pointer().unwrap();
-
-        if self.update_pointer_contents() {
-            pointer.frame(self);
-        }
-
-        pointer.gesture_swipe_begin(
-            self,
-            &GestureSwipeBeginEvent {
-                serial,
-                time: event.time(),
-                fingers: event.fingers(),
-            },
+        let blocked = self.touchpad_swipes_blocked() || pointer.is_grabbed();
+        let swipe = TouchpadSwipe::new(
+            event.device().id(),
+            event.fingers(),
+            self.niri.config.borrow().gestures.clone(),
+            blocked,
         );
+        let action = swipe.action.clone();
+        self.niri.touchpad_swipe = Some(swipe);
+        match action {
+            SwipeAction::Overview => {
+                self.niri.layout.overview_gesture_begin();
+                self.niri.queue_redraw_all();
+            }
+            SwipeAction::Forwarded => {
+                if self.update_pointer_contents() {
+                    pointer.frame(self);
+                }
+                pointer.gesture_swipe_begin(
+                    self,
+                    &GestureSwipeBeginEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: event.time(),
+                        fingers: event.fingers(),
+                    },
+                );
+            }
+            _ => (),
+        }
     }
 
     fn on_gesture_swipe_update<I: InputBackend + 'static>(
@@ -4518,18 +4539,31 @@ impl State {
     ) where
         I::Device: 'static,
     {
+        let Some(mut swipe) = self.niri.touchpad_swipe.take() else {
+            return;
+        };
+        if swipe.device_id != event.device().id() {
+            self.niri.touchpad_swipe = Some(swipe);
+            return;
+        }
+        // A lock or compositor UI opened halfway through the gesture cancels it.
+        let blocked = self.touchpad_swipes_blocked();
+        if blocked && swipe.action != SwipeAction::Ignored {
+            self.niri.touchpad_swipe = Some(swipe);
+            self.finish_touchpad_swipe(event.time(), true);
+            return;
+        }
+
         let mut delta_x = event.delta_x();
         let mut delta_y = event.delta_y();
-
         if let Some(libinput_event) =
             (&event as &dyn Any).downcast_ref::<input::event::gesture::GestureSwipeUpdateEvent>()
         {
             delta_x = libinput_event.dx_unaccelerated();
             delta_y = libinput_event.dy_unaccelerated();
         }
-
         let uninverted_delta_y = delta_y;
-
+        let recognized = swipe.recognize(delta_x, delta_y);
         let device = event.device();
         if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
             if device.config_scroll_natural_scroll_enabled() {
@@ -4537,144 +4571,149 @@ impl State {
                 delta_y = -delta_y;
             }
         }
+        let action = swipe.action.clone();
+        self.niri.touchpad_swipe = Some(swipe);
 
-        let is_overview_open = self.niri.layout.is_overview_open();
-
-        if let Some((cx, cy)) = &mut self.niri.gesture_swipe_3f_cumulative {
-            *cx += delta_x;
-            *cy += delta_y;
-
-            // Check if the gesture moved far enough to decide. Threshold copied from GNOME Shell.
-            let (cx, cy) = (*cx, *cy);
-            if cx * cx + cy * cy >= 16. * 16. {
-                self.niri.gesture_swipe_3f_cumulative = None;
-
-                if let Some(output) = self.niri.output_under_cursor() {
-                    if cx.abs() > cy.abs() {
-                        let output_ws = if is_overview_open {
-                            self.niri.workspace_under_cursor(true)
-                        } else {
-                            // We don't want to accidentally "catch" the wrong workspace during
-                            // animations.
-                            self.niri.output_under_cursor().and_then(|output| {
-                                let mon = self.niri.layout.monitor_for_output(&output)?;
-                                Some((output, mon.active_workspace_ref()))
-                            })
-                        };
-
-                        if let Some((output, ws)) = output_ws {
-                            let ws_idx = self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
-                            self.niri
-                                .layout
-                                .view_offset_gesture_begin(&output, Some(ws_idx), true);
-                        }
+        if recognized {
+            match action {
+                SwipeAction::ViewScroll => {
+                    let output_ws = if self.niri.layout.is_overview_open() {
+                        self.niri.workspace_under_cursor(true)
                     } else {
+                        self.niri.output_under_cursor().and_then(|output| {
+                            let mon = self.niri.layout.monitor_for_output(&output)?;
+                            Some((output, mon.active_workspace_ref()))
+                        })
+                    };
+                    if let Some((output, ws)) = output_ws {
+                        let ws_idx = self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
+                        self.niri
+                            .layout
+                            .view_offset_gesture_begin(&output, Some(ws_idx), true);
+                    }
+                }
+                SwipeAction::WorkspaceSwitch(_) => {
+                    if let Some(output) = self.niri.output_under_cursor() {
                         self.niri
                             .layout
                             .workspace_switch_gesture_begin(&output, true);
                     }
                 }
+                SwipeAction::Overview => {
+                    self.niri.layout.overview_gesture_begin();
+                    self.niri.queue_redraw_all();
+                }
+                _ => (),
             }
         }
 
         let timestamp = Duration::from_micros(event.time().micros());
-
-        let mut handled = false;
-        let res = self
-            .niri
-            .layout
-            .workspace_switch_gesture_update(delta_y, timestamp, true);
-        if let Some(output) = res {
-            if let Some(output) = output {
-                self.niri.queue_redraw(&output);
+        match action {
+            SwipeAction::WorkspaceSwitch(axis) => {
+                let delta = match axis {
+                    SwipeAxis::Horizontal => delta_x,
+                    SwipeAxis::Vertical => delta_y,
+                };
+                if let Some(Some(output)) = self
+                    .niri
+                    .layout
+                    .workspace_switch_gesture_update(delta, timestamp, true)
+                {
+                    self.niri.queue_redraw(&output);
+                }
             }
-            handled = true;
-        }
-
-        let res = self
-            .niri
-            .layout
-            .view_offset_gesture_update(delta_x, timestamp, true);
-        if let Some(output) = res {
-            if let Some(output) = output {
-                self.niri.queue_redraw(&output);
+            SwipeAction::ViewScroll => {
+                if let Some(Some(output)) = self
+                    .niri
+                    .layout
+                    .view_offset_gesture_update(delta_x, timestamp, true)
+                {
+                    self.niri.queue_redraw(&output);
+                }
             }
-            handled = true;
-        }
-
-        let res = self
-            .niri
-            .layout
-            .overview_gesture_update(-uninverted_delta_y, timestamp);
-        if let Some(redraw) = res {
-            if redraw {
-                self.niri.queue_redraw_all();
+            SwipeAction::Overview => {
+                if self
+                    .niri
+                    .layout
+                    .overview_gesture_update(-uninverted_delta_y, timestamp)
+                    == Some(true)
+                {
+                    self.niri.queue_redraw_all();
+                }
             }
-            handled = true;
+            SwipeAction::Forwarded => {
+                let pointer = self.niri.seat.get_pointer().unwrap();
+                if self.update_pointer_contents() {
+                    pointer.frame(self);
+                }
+                pointer.gesture_swipe_update(
+                    self,
+                    &GestureSwipeUpdateEvent {
+                        time: event.time(),
+                        delta: event.delta(),
+                    },
+                );
+            }
+            // Pending and bound gestures are compositor-owned: never send an update to a
+            // client which did not receive their begin. Bound actions run once on release.
+            _ => (),
         }
-
-        if handled {
-            // We handled this event.
-            return;
-        }
-
-        let pointer = self.niri.seat.get_pointer().unwrap();
-
-        if self.update_pointer_contents() {
-            pointer.frame(self);
-        }
-
-        pointer.gesture_swipe_update(
-            self,
-            &GestureSwipeUpdateEvent {
-                time: event.time(),
-                delta: event.delta(),
-            },
-        );
     }
 
     fn on_gesture_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
-        self.niri.gesture_swipe_3f_cumulative = None;
-
-        let mut handled = false;
-        let res = self.niri.layout.workspace_switch_gesture_end(Some(true));
-        if let Some(output) = res {
-            self.niri.queue_redraw(&output);
-            handled = true;
+        if self
+            .niri
+            .touchpad_swipe
+            .as_ref()
+            .is_some_and(|s| s.device_id == event.device().id())
+        {
+            self.finish_touchpad_swipe(event.time(), event.cancelled());
         }
+    }
 
-        let res = self.niri.layout.view_offset_gesture_end(Some(true));
-        if let Some(output) = res {
-            self.niri.queue_redraw(&output);
-            handled = true;
-        }
-
-        let res = self.niri.layout.overview_gesture_end();
-        if res {
-            self.niri.queue_redraw_all();
-            handled = true;
-        }
-
-        if handled {
-            // We handled this event.
+    fn finish_touchpad_swipe(&mut self, time: smithay::backend::input::InputTime, cancelled: bool) {
+        let Some(swipe) = self.niri.touchpad_swipe.take() else {
             return;
+        };
+        match swipe.action {
+            SwipeAction::WorkspaceSwitch(_) => {
+                if let Some(output) = self.niri.layout.workspace_switch_gesture_end(Some(true)) {
+                    self.niri.queue_redraw(&output);
+                }
+            }
+            SwipeAction::ViewScroll => {
+                if let Some(output) = self.niri.layout.view_offset_gesture_end(Some(true)) {
+                    self.niri.queue_redraw(&output);
+                }
+            }
+            SwipeAction::Overview => {
+                if self.niri.layout.overview_gesture_end() {
+                    self.niri.queue_redraw_all();
+                }
+            }
+            SwipeAction::Binding(action) if !cancelled => {
+                if !self.touchpad_swipes_blocked() {
+                    // Match the built-in spatial gestures: act on the output under the pointer.
+                    if let Some(output) = self.niri.output_under_cursor() {
+                        self.niri.layout.focus_output(&output);
+                    }
+                    self.do_action(action, false);
+                    self.niri.queue_redraw_all();
+                }
+            }
+            SwipeAction::Forwarded => {
+                let pointer = self.niri.seat.get_pointer().unwrap();
+                pointer.gesture_swipe_end(
+                    self,
+                    &GestureSwipeEndEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time,
+                        cancelled,
+                    },
+                );
+            }
+            _ => (),
         }
-
-        let serial = SERIAL_COUNTER.next_serial();
-        let pointer = self.niri.seat.get_pointer().unwrap();
-
-        if self.update_pointer_contents() {
-            pointer.frame(self);
-        }
-
-        pointer.gesture_swipe_end(
-            self,
-            &GestureSwipeEndEvent {
-                serial,
-                time: event.time(),
-                cancelled: event.cancelled(),
-            },
-        );
     }
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
@@ -5697,6 +5736,7 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
             input::SendEventsMode::ENABLED
         });
         let _ = device.config_tap_set_enabled(c.tap);
+        configure_three_finger_drag(device, c.three_finger_drag);
         let _ = device.config_dwt_set_enabled(c.dwt);
         let _ = device.config_dwtp_set_enabled(c.dwtp);
         let _ = device.config_tap_set_drag_lock_enabled(if c.drag_lock {

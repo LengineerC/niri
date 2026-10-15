@@ -9,6 +9,12 @@ Here's a quick glance at the available settings along with their default values.
 
 ```kdl
 gestures {
+    workspace-switch-fingers 3
+    workspace-switch-axis "vertical"
+    view-scroll-fingers 3
+    overview-fingers 4
+    swipe-threshold 16
+
     dnd-edge-view-scroll {
         trigger-width 30
         delay-ms 100
@@ -30,6 +36,57 @@ gestures {
     }
 }
 ```
+
+### Touchpad swipes
+
+The built-in swipes are configurable and retain their finger-following animations:
+
+- `workspace-switch-fingers`: finger count for switching workspaces (default `3`).
+- `workspace-switch-axis`: `"vertical"` (default) or `"horizontal"`. This changes the input axis, not niri's vertical workspace arrangement.
+- `view-scroll-fingers`: finger count for scrolling the tiling view horizontally (default `3`).
+- `overview-fingers`: finger count for opening/closing overview vertically (default `4`).
+- Set a finger count to `0` to disable that built-in gesture. Use `3`, `4`, or `5` for touchpads capable of reporting those gestures.
+- `swipe-threshold`: accumulated movement needed to choose a direction, in libinput's unaccelerated gesture units (default `16`, range `1`–`1000`).
+
+Use `swipe fingers=4 direction="up" { open-overview; }` to bind a direction to any action accepted in `binds`.
+Each binding takes exactly one action. Supported counts are `3`–`5`; directions are `left`, `right`, `up`, and `down`.
+Directions refer to physical finger movement and do not invert with `natural-scroll`.
+The built-in scrolling gestures continue to honor natural scrolling as before.
+
+Bindings take precedence over built-in gestures in that direction. Otherwise, workspace switching takes precedence over view scrolling, then overview.
+An action is selected when the threshold is crossed and runs once when the fingers are released; cancellation or a short swipe does not run an action.
+Action bindings use ordinary action animations, rather than continuous finger-following progress.
+Changing the config during a gesture takes effect on the next gesture.
+Later bindings with the same finger count and direction replace earlier bindings, including across included files.
+
+When any binding or built-in gesture uses a finger count, niri owns the complete gesture sequence for that count, including unmapped directions.
+Unused finger counts are forwarded to applications. Compositor swipes are suppressed while locked, in the screenshot/MRU/portal picker UI, or when starting during a pointer grab.
+Two-finger scrolling and client pinch gestures are unchanged.
+
+For a Mac-style setup:
+
+```kdl
+input {
+    touchpad {
+        three-finger-drag true
+        natural-scroll
+    }
+}
+gestures {
+    workspace-switch-fingers 4
+    workspace-switch-axis "horizontal"
+    view-scroll-fingers 0
+    overview-fingers 0
+    swipe-threshold 24
+    swipe fingers=4 direction="up" { open-overview; }
+    swipe fingers=4 direction="down" { open-grid-overview; }
+}
+```
+
+This provides native three-finger dragging, interactive four-finger horizontal workspace switching, and configurable up/down actions.
+Grid overview is a workspace-wide window picker, not macOS's application-only App Exposé.
+For continuous four-finger overview instead of the up/down actions, remove both `swipe` bindings and set `overview-fingers 4`.
+The complete example is also available in `resources/mac-touchpad.kdl`.
 
 ### `dnd-edge-view-scroll`
 

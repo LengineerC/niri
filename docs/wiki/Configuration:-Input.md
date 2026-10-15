@@ -32,6 +32,7 @@ input {
         // dwt
         // dwtp
         // drag false
+        // three-finger-drag true
         // drag-lock
         natural-scroll
         // accel-speed 0.2
@@ -249,6 +250,12 @@ Settings specific to `touchpad`s:
 - `dwt`: disable-when-typing.
 - `dwtp`: disable-when-trackpointing.
 - `drag`: <sup>Since: 25.05</sup> can be `true` or `false`, controls if tap-and-drag is enabled.
+- `three-finger-drag`: `true` enables libinput's native three-finger dragging; defaults to `false`.
+  Three fingers move the pointer with the primary button held, allowing text selection, file dragging, and titlebar window dragging without pressing the touchpad.
+  Requires a build with libinput 1.28 or newer and a supporting device; unsupported configurations produce a warning in the log.
+  This is independent of `drag` (tap-and-drag) and supports live configuration reload.
+  While enabled, three-finger motion is used for dragging instead of swipe actions; configure navigation on four fingers in [`gestures`](./Configuration:-Gestures.md#touchpad-swipes).
+  Finger-lift timing and interaction with tapping follow [libinput's three-finger drag behavior](https://wayland.freedesktop.org/libinput/doc/latest/drag-3fg.html).
 - `drag-lock`: <sup>Since: 25.02</sup> if set, lifting the finger off for a short time while dragging will not drop the dragged item. See the [libinput documentation](https://wayland.freedesktop.org/libinput/doc/latest/tapping.html#tap-and-drag).
 - `pinch-sensitivity`: <sup>Since: next release</sup> scales the sensitivity of pinch gestures sent to applications.
   Values above `1.0` increase sensitivity, while values below `1.0` decrease it.

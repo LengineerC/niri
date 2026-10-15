@@ -693,7 +693,7 @@ impl Options {
         Self {
             layout: config.layout.clone(),
             animations: config.animations.clone(),
-            gestures: config.gestures,
+            gestures: config.gestures.clone(),
             overview: config.overview,
             grid_overview: config.grid_overview,
             blur: config.blur,

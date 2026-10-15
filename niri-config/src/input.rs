@@ -195,6 +195,8 @@ pub struct Touchpad {
     pub dwtp: bool,
     #[knuffel(child, unwrap(argument))]
     pub drag: Option<bool>,
+    #[knuffel(child, unwrap(argument), default)]
+    pub three_finger_drag: bool,
     #[knuffel(child)]
     pub drag_lock: bool,
     #[knuffel(child)]

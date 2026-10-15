@@ -1,0 +1,27 @@
+// Merge these settings into your config, or include this file from config.kdl.
+// Requires niri built with libinput >= 1.28 and a supporting touchpad.
+input {
+    touchpad {
+        three-finger-drag true
+        natural-scroll
+    }
+}
+
+gestures {
+    // Keep workspace switching interactive, using horizontal four-finger motion.
+    // niri's workspaces still animate vertically.
+    workspace-switch-fingers 4
+    workspace-switch-axis "horizontal"
+    view-scroll-fingers 0
+    overview-fingers 0
+    swipe-threshold 24
+
+    // Directional actions run once on release, after crossing the threshold.
+    swipe fingers=4 direction="up" { open-overview; }
+    swipe fingers=4 direction="down" { open-grid-overview; }
+    // Grid shows the workspace's windows, not only the current application's windows.
+
+    // Alternatively, replace interactive horizontal switching with arbitrary actions:
+    // swipe fingers=4 direction="left" { focus-workspace-down; }
+    // swipe fingers=4 direction="right" { focus-workspace-up; }
+}

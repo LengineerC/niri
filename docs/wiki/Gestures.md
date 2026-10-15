@@ -56,6 +56,8 @@ Switch workspaces by holding <kbd>Mod</kbd> and the middle mouse button (or the 
 
 Switch workspaces with three-finger vertical swipes.
 
+The finger count and axis can be changed in the [gesture configuration](./Configuration:-Gestures.md#touchpad-swipes).
+
 #### Horizontal View Movement
 
 Move the view horizontally with three-finger horizontal swipes.
@@ -65,6 +67,14 @@ Move the view horizontally with three-finger horizontal swipes.
 <sup>Since: 25.05</sup>
 
 Open and close the overview with a four-finger vertical swipe.
+
+You can configure the finger count or replace individual swipe directions with actions in the [gesture configuration](./Configuration:-Gestures.md#touchpad-swipes).
+
+#### Three-finger Drag
+
+Enable `input { touchpad { three-finger-drag true; }; }` to drag using three fingers without clicking.
+This uses libinput's native primary-button dragging for text, files, and window titlebars.
+See [`three-finger-drag`](./Configuration:-Input.md) for requirements and the gesture configuration above for a four-finger navigation example.
 
 ### Touchscreen
 

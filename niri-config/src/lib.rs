@@ -1204,6 +1204,7 @@ mod tests {
                     drag: Some(
                         true,
                     ),
+                    three_finger_drag: false,
                     drag_lock: false,
                     natural_scroll: false,
                     click_method: Some(
@@ -1953,6 +1954,12 @@ mod tests {
                     bottom_left: None,
                     bottom_right: None,
                 },
+                workspace_switch_fingers: 3,
+                workspace_switch_axis: Vertical,
+                view_scroll_fingers: 3,
+                overview_fingers: 4,
+                swipe_threshold: 16.0,
+                swipes: [],
             },
             overview: Overview {
                 zoom: 0.5,

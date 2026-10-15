@@ -1,6 +1,7 @@
 use smithay::backend::input::{
-    Device, DeviceCapability, Event, InputBackend, InputTime, KeyState, KeyboardKeyEvent, Keycode,
-    UnusedEvent,
+    Device, DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GestureSwipeBeginEvent,
+    GestureSwipeEndEvent, GestureSwipeUpdateEvent, InputBackend, InputTime, KeyState,
+    KeyboardKeyEvent, Keycode, UnusedEvent,
 };
 use smithay::output::Output;
 
@@ -10,6 +11,46 @@ pub struct TestInputBackend;
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct TestInputDevice;
+
+#[derive(Default)]
+pub struct TestSwipeEvent {
+    pub fingers: u32,
+    pub dx: f64,
+    pub dy: f64,
+    pub cancelled: bool,
+}
+
+impl Event<TestInputBackend> for TestSwipeEvent {
+    fn time(&self) -> InputTime {
+        InputTime::now()
+    }
+    fn device(&self) -> TestInputDevice {
+        TestInputDevice
+    }
+}
+
+impl GestureBeginEvent<TestInputBackend> for TestSwipeEvent {
+    fn fingers(&self) -> u32 {
+        self.fingers
+    }
+}
+
+impl GestureEndEvent<TestInputBackend> for TestSwipeEvent {
+    fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+}
+
+impl GestureSwipeBeginEvent<TestInputBackend> for TestSwipeEvent {}
+impl GestureSwipeEndEvent<TestInputBackend> for TestSwipeEvent {}
+impl GestureSwipeUpdateEvent<TestInputBackend> for TestSwipeEvent {
+    fn delta_x(&self) -> f64 {
+        self.dx
+    }
+    fn delta_y(&self) -> f64 {
+        self.dy
+    }
+}
 
 pub struct TestKeyboardKeyEvent {
     pub time: InputTime,
@@ -27,9 +68,9 @@ impl InputBackend for TestInputBackend {
     type PointerMotionEvent = UnusedEvent;
     type PointerMotionAbsoluteEvent = UnusedEvent;
 
-    type GestureSwipeBeginEvent = UnusedEvent;
-    type GestureSwipeUpdateEvent = UnusedEvent;
-    type GestureSwipeEndEvent = UnusedEvent;
+    type GestureSwipeBeginEvent = TestSwipeEvent;
+    type GestureSwipeUpdateEvent = TestSwipeEvent;
+    type GestureSwipeEndEvent = TestSwipeEvent;
     type GesturePinchBeginEvent = UnusedEvent;
     type GesturePinchUpdateEvent = UnusedEvent;
     type GesturePinchEndEvent = UnusedEvent;

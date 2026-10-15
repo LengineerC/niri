@@ -1,14 +1,173 @@
 use crate::utils::MergeWith;
 use crate::FloatOrInt;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[cfg(test)]
+mod swipe_tests {
+    use super::*;
+    use crate::{Action, Config};
+
+    #[test]
+    fn mac_style_gestures_parse() {
+        let config = Config::parse_mem(
+            r#"
+            input { touchpad { three-finger-drag true; }; }
+            gestures {
+                workspace-switch-fingers 4
+                workspace-switch-axis "horizontal"
+                view-scroll-fingers 0
+                overview-fingers 0
+                swipe-threshold 24
+                swipe fingers=4 direction="up" { open-overview; }
+                swipe fingers=4 direction="down" { open-grid-overview; }
+            }
+        "#,
+        )
+        .unwrap();
+        assert!(config.input.touchpad.three_finger_drag);
+        assert_eq!(config.gestures.workspace_switch_fingers, 4);
+        assert_eq!(config.gestures.workspace_switch_axis, SwipeAxis::Horizontal);
+        assert_eq!(config.gestures.swipes[0].action, Action::OpenOverview);
+        assert_eq!(config.gestures.swipes[1].action, Action::OpenGridOverview);
+    }
+
+    #[test]
+    fn swipe_bindings_merge_by_fingers_and_direction() {
+        let parts: Vec<GesturesPart> = knuffel::parse(
+            "gestures.kdl",
+            r#"
+            gestures { swipe fingers=4 direction="up" { open-overview; }; }
+            gestures {
+                swipe fingers=4 direction="up" { open-grid-overview; }
+                swipe fingers=4 direction="left" { focus-workspace-down; }
+            }
+        "#,
+        )
+        .unwrap();
+        let mut gestures = Gestures::default();
+        for part in parts {
+            gestures.merge_with(&part);
+        }
+        assert_eq!(gestures.swipes.len(), 2);
+        assert_eq!(gestures.swipes[0].action, Action::OpenGridOverview);
+        assert_eq!(gestures.view_scroll_fingers, 3);
+    }
+
+    #[test]
+    fn rejects_invalid_swipe_bindings() {
+        for body in [
+            "swipe fingers=2 direction=\"up\" { open-overview; }",
+            "swipe fingers=6 direction=\"up\" { open-overview; }",
+            "swipe fingers=4 direction=\"diagonal\" { open-overview; }",
+            "swipe fingers=4 direction=\"up\" {}",
+            "swipe fingers=4 direction=\"up\" { open-overview; close-overview; }",
+            "swipe-threshold 0",
+        ] {
+            assert!(
+                Config::parse_mem(&format!("gestures {{ {body}; }}")).is_err(),
+                "{body}"
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Gestures {
     pub dnd_edge_view_scroll: DndEdgeViewScroll,
     pub dnd_edge_workspace_switch: DndEdgeWorkspaceSwitch,
     pub hot_corners: HotCorners,
+    pub workspace_switch_fingers: u8,
+    pub workspace_switch_axis: SwipeAxis,
+    pub view_scroll_fingers: u8,
+    pub overview_fingers: u8,
+    pub swipe_threshold: f64,
+    pub swipes: Vec<SwipeBinding>,
 }
 
-#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+impl Default for Gestures {
+    fn default() -> Self {
+        Self {
+            dnd_edge_view_scroll: Default::default(),
+            dnd_edge_workspace_switch: Default::default(),
+            hot_corners: Default::default(),
+            workspace_switch_fingers: 3,
+            workspace_switch_axis: SwipeAxis::Vertical,
+            view_scroll_fingers: 3,
+            overview_fingers: 4,
+            swipe_threshold: 16.,
+            swipes: Vec::new(),
+        }
+    }
+}
+
+#[derive(knuffel::DecodeScalar, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SwipeAxis {
+    Horizontal,
+    #[default]
+    Vertical,
+}
+
+#[derive(knuffel::DecodeScalar, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwipeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl SwipeDirection {
+    pub fn axis(self) -> SwipeAxis {
+        match self {
+            Self::Left | Self::Right => SwipeAxis::Horizontal,
+            Self::Up | Self::Down => SwipeAxis::Vertical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwipeBinding {
+    pub fingers: u8,
+    pub direction: SwipeDirection,
+    pub action: crate::Action,
+}
+
+impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for SwipeBinding {
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, knuffel::errors::DecodeError<S>> {
+        #[derive(knuffel::Decode)]
+        struct Raw {
+            #[knuffel(property)]
+            fingers: u8,
+            #[knuffel(property)]
+            direction: SwipeDirection,
+            #[knuffel(children)]
+            actions: Vec<crate::Action>,
+        }
+        let raw = Raw::decode_node(node, ctx)?;
+        if !(3..=5).contains(&raw.fingers) {
+            return Err(knuffel::errors::DecodeError::unexpected(
+                node,
+                "swipe",
+                "fingers must be between 3 and 5",
+            ));
+        }
+        if raw.actions.len() != 1 {
+            return Err(knuffel::errors::DecodeError::unexpected(
+                node,
+                "swipe",
+                "exactly one action is required",
+            ));
+        }
+        Ok(Self {
+            fingers: raw.fingers,
+            direction: raw.direction,
+            action: raw.actions.into_iter().next().unwrap(),
+        })
+    }
+}
+
+#[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct GesturesPart {
     #[knuffel(child)]
     pub dnd_edge_view_scroll: Option<DndEdgeViewScrollPart>,
@@ -16,6 +175,18 @@ pub struct GesturesPart {
     pub dnd_edge_workspace_switch: Option<DndEdgeWorkspaceSwitchPart>,
     #[knuffel(child)]
     pub hot_corners: Option<HotCorners>,
+    #[knuffel(child, unwrap(argument))]
+    pub workspace_switch_fingers: Option<u8>,
+    #[knuffel(child, unwrap(argument))]
+    pub workspace_switch_axis: Option<SwipeAxis>,
+    #[knuffel(child, unwrap(argument))]
+    pub view_scroll_fingers: Option<u8>,
+    #[knuffel(child, unwrap(argument))]
+    pub overview_fingers: Option<u8>,
+    #[knuffel(child, unwrap(argument))]
+    pub swipe_threshold: Option<FloatOrInt<1, 1000>>,
+    #[knuffel(children(name = "swipe"))]
+    pub swipes: Vec<SwipeBinding>,
 }
 
 impl MergeWith<GesturesPart> for Gestures {
@@ -25,7 +196,20 @@ impl MergeWith<GesturesPart> for Gestures {
             dnd_edge_view_scroll,
             dnd_edge_workspace_switch,
         );
-        merge_clone!((self, part), hot_corners);
+        merge_clone!(
+            (self, part),
+            hot_corners,
+            workspace_switch_fingers,
+            workspace_switch_axis,
+            view_scroll_fingers,
+            overview_fingers
+        );
+        merge!((self, part), swipe_threshold);
+        for binding in &part.swipes {
+            self.swipes
+                .retain(|b| b.fingers != binding.fingers || b.direction != binding.direction);
+            self.swipes.push(binding.clone());
+        }
     }
 }
 
