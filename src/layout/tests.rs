@@ -3863,6 +3863,40 @@ fn bound_overview_gesture_progress_reverses_and_finishes() {
 }
 
 #[test]
+fn touchpad_workspace_cancellation_returns_to_start_instead_of_projected_target() {
+    for cancelled in [true, false] {
+        let mut layout = check_ops([
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+        ]);
+        let output = layout.active_output().unwrap().clone();
+        let original = layout.active_workspace().unwrap().id();
+        layout.workspace_switch_gesture_begin(&output, true);
+        layout.clock.set_unadjusted(Duration::from_millis(20));
+        layout.workspace_switch_gesture_update(300., Duration::from_millis(20), true);
+        if cancelled {
+            assert!(layout
+                .workspace_switch_gesture_cancel(Some(false))
+                .is_none());
+            assert!(layout.workspace_switch_gesture_cancel(Some(true)).is_some());
+            assert_eq!(layout.active_workspace().unwrap().id(), original);
+        } else {
+            assert!(layout.workspace_switch_gesture_end(Some(true)).is_some());
+            assert_ne!(layout.active_workspace().unwrap().id(), original);
+        }
+        layout.clock.set_unadjusted(Duration::from_secs(10));
+        layout.advance_animations();
+        assert_eq!(
+            layout.active_workspace().unwrap().id() == original,
+            cancelled
+        );
+        layout.verify_invariants();
+    }
+}
+
+#[test]
 fn bound_grid_gesture_empty_output_cancellation_restores_state() {
     let mut layout = check_ops([Op::AddOutput(1)]);
     layout.bound_view_gesture_begin(true);

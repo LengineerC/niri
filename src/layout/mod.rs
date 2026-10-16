@@ -4463,13 +4463,30 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn workspace_switch_gesture_end(&mut self, is_touchpad: Option<bool>) -> Option<Output> {
+        self.finish_workspace_switch_gesture(is_touchpad, false)
+    }
+
+    pub fn workspace_switch_gesture_cancel(&mut self, is_touchpad: Option<bool>) -> Option<Output> {
+        self.finish_workspace_switch_gesture(is_touchpad, true)
+    }
+
+    fn finish_workspace_switch_gesture(
+        &mut self,
+        is_touchpad: Option<bool>,
+        cancelled: bool,
+    ) -> Option<Output> {
         let monitors = match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => monitors,
             MonitorSet::NoOutputs { .. } => return None,
         };
 
         for monitor in monitors {
-            if monitor.workspace_switch_gesture_end(is_touchpad) {
+            let changed = if cancelled {
+                monitor.workspace_switch_gesture_cancel(is_touchpad)
+            } else {
+                monitor.workspace_switch_gesture_end(is_touchpad)
+            };
+            if changed {
                 return Some(monitor.output.clone());
             }
         }

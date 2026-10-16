@@ -2370,6 +2370,18 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn workspace_switch_gesture_end(&mut self, is_touchpad: Option<bool>) -> bool {
+        self.finish_workspace_switch_gesture(is_touchpad, false)
+    }
+
+    pub fn workspace_switch_gesture_cancel(&mut self, is_touchpad: Option<bool>) -> bool {
+        self.finish_workspace_switch_gesture(is_touchpad, true)
+    }
+
+    fn finish_workspace_switch_gesture(
+        &mut self,
+        is_touchpad: Option<bool>,
+        cancelled: bool,
+    ) -> bool {
         let Some(WorkspaceSwitch::Gesture(gesture)) = &self.workspace_switch else {
             return false;
         };
@@ -2409,6 +2421,15 @@ impl<W: LayoutElement> Monitor<W> {
         let new_idx = new_idx.round() as usize;
 
         velocity *= rubber_band.clamp_derivative(min, max, gesture.start_idx + current_pos);
+
+        // Finger-count changes and gesture reclassification are cancellations,
+        // not releases. Never commit the projected endpoint of that old stream.
+        let new_idx = if cancelled {
+            velocity = 0.;
+            gesture.center_idx.min(self.workspaces.len() - 1)
+        } else {
+            new_idx
+        };
 
         if self.active_workspace_idx != new_idx {
             self.previous_workspace_id = Some(self.workspaces[self.active_workspace_idx].id());

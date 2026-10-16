@@ -5,6 +5,13 @@ use smithay::backend::input::{
 pub struct TouchpadDrag {
     pub device_id: String,
     pub pressed: bool,
+    pub source: DragSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragSource {
+    Swipe,
+    Pinch,
 }
 
 /// Feed gesture motion through the normal pointer handlers so constraints,

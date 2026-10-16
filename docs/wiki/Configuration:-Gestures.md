@@ -60,11 +60,18 @@ Each binding takes exactly one action. Supported counts are `3`–`5`; direction
 Directions refer to physical finger movement and do not invert with `natural-scroll`.
 Near-diagonal startup motion is left undecided until the dominant axis reaches the threshold and leads the other axis by at least half the threshold. Short back-and-forth movement must also have net displacement of at least 65% of its path length. Clear motion is recognized without waiting for another event; the decision depends on displacement rather than packet count. Once selected, the direction stays locked until release.
 The built-in scrolling gestures continue to honor natural scrolling as before.
+Cancelled workspace-switch swipes animate back to the workspace where they started instead of committing the projected endpoint. This also applies when a new pinch or a changed finger count interrupts the swipe.
+
+After an undecided path exceeds four times `swipe-threshold`, direction recovery uses distance-weighted recent motion (memory length twice the threshold), with an axis lead of one quarter of the threshold. This lets an uneven or diagonal start recover once the intended direction becomes clear. Old undecided travel is not injected as an animation jump. An exactly diagonal movement remains undecided, and a recognized gesture does not change its binding midway through.
 
 Bindings take precedence over built-in gestures in that direction. Otherwise, workspace switching takes precedence over view scrolling, then overview.
 An action is selected when the threshold is crossed and runs once when the fingers are released; cancellation or a short swipe does not run an action.
 Exception: open/close/toggle actions for grid overview and overview update the transition continuously while the fingers move. Reversing the gesture reverses the transition; release settles toward the nearest endpoint, and cancellation returns toward the starting endpoint. A full swipe transition spans 200 unaccelerated gesture units.
 Changing the config during a gesture takes effect on the next gesture.
+
+For diagnosis, start the compositor itself with `RUST_LOG=info,niri::gestures=trace` in its environment. The `niri::gestures` log target records gesture begin/end, finger counts, motion, pinch scale/rotation, and recognition decisions; it does not record typed text. Remove this tracing setting after reproducing the issue because motion logs can be large. Setting it only for an application launched inside an already running session will not enable compositor tracing.
+
+These handlers consume libinput's classified gestures, not raw touchpad contacts. A swipe stream has no pinch scale, so niri cannot reliably reinterpret a pinch that libinput has already classified as a swipe. Capture one failed gesture and note the intended action before tuning thresholds or changing the lower-level recognizer.
 Later bindings with the same finger count and direction replace earlier bindings, including across included files.
 
 When any binding or built-in gesture uses a finger count, niri owns the complete gesture sequence for that count, including unmapped directions.

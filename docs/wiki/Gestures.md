@@ -77,7 +77,7 @@ Hold Mod and drag two fingers to resize the window under the pointer. The neares
 #### Three-finger Drag
 
 Enable `input { touchpad { three-finger-drag true; }; }` to drag using three fingers without clicking.
-By default, niri converts three-finger swipe motion into primary-button dragging for text, files, window titlebars, and Mod + window dragging. Set `three-finger-drag-mode "native"` to use libinput's native recognizer instead.
+By default, niri converts three-finger swipe or pinch translation into primary-button dragging for text, files, window titlebars, and Mod + window dragging. Set `three-finger-drag-mode "native"` to use libinput's native recognizer instead.
 See [`three-finger-drag`](./Configuration:-Input.md) for requirements and the gesture configuration above for a four-finger navigation example.
 
 ### Touchscreen

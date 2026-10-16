@@ -10,6 +10,7 @@ pub struct TouchpadSwipe {
     pub direction: Option<SwipeDirection>,
     pub action: SwipeAction,
     path_length: f64,
+    recent_motion: (f64, f64),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +57,7 @@ impl TouchpadSwipe {
             direction: None,
             action,
             path_length: 0.,
+            recent_motion: (0., 0.),
         }
     }
 
@@ -66,22 +68,45 @@ impl TouchpadSwipe {
         }
         self.cumulative.0 += dx;
         self.cumulative.1 += dy;
-        self.path_length += dx.hypot(dy);
+        let distance = dx.hypot(dy);
+        self.path_length += distance;
         if self.action != SwipeAction::Pending {
             return false;
         }
-        let (x, y) = self.cumulative;
+        let threshold = self.config.swipe_threshold;
+        // Distance-weighted memory, independent of report frequency. After a
+        // prolonged ambiguous start, use recent intent instead of requiring the
+        // user to undo all of the initial movement. Keep exact diagonal motion
+        // undecided rather than arbitrarily choosing a workspace/window action.
+        let memory = (threshold * 2.).max(1.);
+        if distance > 0. {
+            let decay = (-distance / memory).exp();
+            let weight = -(-distance / memory).exp_m1() * memory / distance;
+            self.recent_motion.0 = self.recent_motion.0 * decay + dx * weight;
+            self.recent_motion.1 = self.recent_motion.1 * decay + dy * weight;
+        }
+        let recover_start = self.path_length > memory * 2.;
+        let (x, y) = if recover_start {
+            self.recent_motion
+        } else {
+            self.cumulative
+        };
         // Require distance evidence, not a number of packets: report rate should
         // not determine latency. A diagonal start remains undecided until one
         // axis has a meaningful lead, even on a long, slightly diagonal swipe.
         let major = x.abs().max(y.abs());
         let minor = x.abs().min(y.abs());
-        let threshold = self.config.swipe_threshold;
-        if major < threshold || major - minor < threshold * 0.5 {
+        let axis_margin = threshold * if recover_start { 0.25 } else { 0.5 };
+        if major < threshold || major - minor < axis_margin {
             return false;
         }
         // Short back-and-forth placement jitter is not directional intent.
-        if major < threshold * 2. && x.hypot(y) < self.path_length * 0.65 {
+        let evidence_length = if recover_start {
+            memory * -(-self.path_length / memory).exp_m1()
+        } else {
+            self.path_length
+        };
+        if major < threshold * 2. && x.hypot(y) < evidence_length * 0.65 {
             return false;
         }
         let direction = if x.abs() > y.abs() {
@@ -96,6 +121,10 @@ impl TouchpadSwipe {
             SwipeDirection::Down
         };
         self.direction = Some(direction);
+        if recover_start {
+            // Do not inject the whole undecided path as an initial animation jump.
+            self.cumulative = (x, y);
+        }
         self.action = if let Some(binding) = self
             .config
             .swipes
@@ -277,6 +306,39 @@ pub fn configure_three_finger_drag(device: &input::Device, enabled: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ambiguous_start_can_recover_without_injecting_old_motion() {
+        for (dx, dy, direction) in [
+            (12., 0., SwipeDirection::Right),
+            (-12., 0., SwipeDirection::Left),
+            (0., 12., SwipeDirection::Down),
+            (0., -12., SwipeDirection::Up),
+        ] {
+            let mut swipe = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
+            assert!(!swipe.recognize(
+                if dx < 0. { -100. } else { 100. },
+                if dy < 0. { -100. } else { 100. }
+            ));
+            assert!(swipe.recognize(dx, dy));
+            assert_eq!(swipe.direction, Some(direction));
+            assert!(swipe.cumulative.0.hypot(swipe.cumulative.1) < 32.);
+        }
+    }
+
+    #[test]
+    fn long_diagonal_start_and_packet_splitting() {
+        for count in [1, 10, 100] {
+            let mut swipe = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
+            for _ in 0..count {
+                assert!(!swipe.recognize(100. / count as f64, 100. / count as f64));
+            }
+            for _ in 0..count {
+                swipe.recognize(12. / count as f64, 0.);
+            }
+            assert_eq!(swipe.direction, Some(SwipeDirection::Right));
+        }
+    }
 
     #[test]
     fn swipe_direction_is_symmetric_and_independent_of_packet_count() {

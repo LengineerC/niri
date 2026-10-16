@@ -219,6 +219,25 @@ fn swipe_binding_fires_once_on_release() {
 }
 
 #[test]
+fn cancelled_workspace_swipe_and_pinch_takeover_do_not_switch_workspace() {
+    for takeover in [false, true] {
+        let config = Config::parse_mem("workspace \"one\"\nworkspace \"two\"").unwrap();
+        let mut f = Fixture::with_config(config);
+        f.add_output(1, (1920, 1080));
+        let original = f.niri().layout.active_workspace().unwrap().id();
+        begin(&mut f);
+        update(&mut f, 300.);
+        if takeover {
+            pinch_begin(&mut f, 4);
+            pinch_update(&mut f, 1.1);
+        } else {
+            end(&mut f, true);
+        }
+        assert_eq!(f.niri().layout.active_workspace().unwrap().id(), original);
+    }
+}
+
+#[test]
 fn cancelled_short_and_orphan_swipes_do_not_fire() {
     let mut f = fixture();
     update(&mut f, -100.);
@@ -274,6 +293,82 @@ fn pinch_update(f: &mut Fixture, scale: f64) {
                 ..Default::default()
             },
         });
+}
+
+#[test]
+fn three_finger_pinch_translation_drags_in_all_directions() {
+    for (dx, dy) in [(8., 0.), (-8., 0.), (0., 8.), (0., -8.), (5., 5.)] {
+        let mut f = fixture();
+        f.niri()
+            .config
+            .borrow_mut()
+            .input
+            .touchpad
+            .three_finger_drag = true;
+        pinch_begin(&mut f, 3);
+        let overview_before = f.niri().layout.is_overview_open();
+        pinch_update(&mut f, 1.2);
+        assert!(!f.niri().touchpad_drag.as_ref().unwrap().pressed);
+        assert_eq!(f.niri().layout.is_overview_open(), overview_before);
+        f.niri_state()
+            .process_input_event::<TestInputBackend>(InputEvent::GesturePinchUpdate {
+                event: TestSwipeEvent {
+                    dx,
+                    dy,
+                    scale: 1.2,
+                    ..Default::default()
+                },
+            });
+        assert!(f.niri().touchpad_drag.as_ref().unwrap().pressed);
+        assert!(f.niri().touchpad_pinch.is_none());
+        // A stray end from the other event family must not release the drag.
+        end(&mut f, true);
+        assert!(f.niri().touchpad_drag.as_ref().unwrap().pressed);
+        pinch_end(&mut f, true);
+        assert!(f.niri().touchpad_drag.is_none());
+    }
+}
+
+#[test]
+fn three_finger_pinch_drag_moves_pointer_and_cancels_on_four_fingers() {
+    let mut f = fixture();
+    f.niri()
+        .config
+        .borrow_mut()
+        .input
+        .touchpad
+        .three_finger_drag = true;
+    pinch_begin(&mut f, 3);
+    let pointer = f.niri().seat.get_pointer().unwrap();
+    let before = pointer.current_location();
+    f.niri_state()
+        .process_input_event::<TestInputBackend>(InputEvent::GesturePinchUpdate {
+            event: TestSwipeEvent {
+                dx: 12.,
+                dy: 7.,
+                scale: 0.9,
+                ..Default::default()
+            },
+        });
+    assert_eq!(pointer.current_location() - before, (12., 7.).into());
+    pinch_begin(&mut f, 4);
+    assert!(f.niri().touchpad_drag.is_none());
+    pinch_update(&mut f, 1.1);
+    assert!(f.niri().layout.is_overview_open());
+}
+
+#[test]
+fn native_mode_does_not_convert_three_finger_pinch() {
+    let mut f = fixture();
+    {
+        let mut config = f.niri().config.borrow_mut();
+        config.input.touchpad.three_finger_drag = true;
+        config.input.touchpad.three_finger_drag_mode =
+            niri_config::input::ThreeFingerDragMode::Native;
+    }
+    pinch_begin(&mut f, 3);
+    assert!(f.niri().touchpad_drag.is_none());
+    assert!(f.niri().touchpad_pinch.is_some());
 }
 
 fn pinch_end(f: &mut Fixture, cancelled: bool) {

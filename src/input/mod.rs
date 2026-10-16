@@ -72,7 +72,7 @@ pub mod swipe_tracker;
 pub mod touch_overview_grab;
 pub mod touchpad_drag;
 pub mod touchpad_swipe;
-use touchpad_drag::{GesturePointerEvent, TouchpadDrag};
+use touchpad_drag::{DragSource, GesturePointerEvent, TouchpadDrag};
 
 use touchpad_swipe::{
     configure_three_finger_drag, SwipeAction, TouchpadPinch, TouchpadResize, TouchpadSwipe,
@@ -4674,6 +4674,7 @@ impl State {
     }
 
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
+        tracing::debug!(target: "niri::gestures", device = %event.device().id(), fingers = event.fingers(), "swipe begin");
         self.finish_touchpad_drag(event.time());
         self.finish_touchpad_pinch(event.time(), true);
         self.finish_touchpad_resize();
@@ -4695,6 +4696,7 @@ impl State {
             self.niri.touchpad_drag = Some(TouchpadDrag {
                 device_id: event.device().id(),
                 pressed: false,
+                source: DragSource::Swipe,
             });
             return;
         }
@@ -4734,46 +4736,11 @@ impl State {
     ) where
         I::Device: 'static,
     {
-        if let Some(mut drag) = self.niri.touchpad_drag.take() {
-            if drag.device_id != event.device().id() {
-                self.niri.touchpad_drag = Some(drag);
-                return;
-            }
-            if self.touchpad_swipes_blocked() {
-                self.niri.touchpad_drag = Some(drag);
-                self.finish_touchpad_drag(event.time());
-                return;
-            }
-            let delta = (event.delta_x(), event.delta_y());
-            let delta_unaccelerated = (&event as &dyn Any)
-                .downcast_ref::<input::event::gesture::GestureSwipeUpdateEvent>()
-                .map_or(delta, |event| {
-                    (event.dx_unaccelerated(), event.dy_unaccelerated())
-                });
-            if !delta.0.is_finite() || !delta.1.is_finite() || delta == (0., 0.) {
-                self.niri.touchpad_drag = Some(drag);
-                return;
-            }
-            if !drag.pressed {
-                self.on_pointer_button::<I>(GesturePointerEvent {
-                    source: &event,
-                    delta,
-                    delta_unaccelerated,
-                    state: ButtonState::Pressed,
-                });
-                // A configured mouse binding may have consumed the press.
-                if self.niri.suppressed_buttons.remove(&0x110) {
-                    return;
-                }
-                drag.pressed = true;
-            }
-            self.on_pointer_motion::<I>(GesturePointerEvent {
-                source: &event,
-                delta,
-                delta_unaccelerated,
-                state: ButtonState::Pressed,
-            });
-            self.niri.touchpad_drag = Some(drag);
+        let delta = (event.delta_x(), event.delta_y());
+        let raw = (&event as &dyn Any)
+            .downcast_ref::<input::event::gesture::GestureSwipeUpdateEvent>()
+            .map_or(delta, |e| (e.dx_unaccelerated(), e.dy_unaccelerated()));
+        if self.update_touchpad_drag::<I>(&event, DragSource::Swipe, delta, raw) {
             return;
         }
         let Some(mut swipe) = self.niri.touchpad_swipe.take() else {
@@ -4800,6 +4767,7 @@ impl State {
             delta_y = libinput_event.dy_unaccelerated();
         }
         let recognized = swipe.recognize(delta_x, delta_y);
+        tracing::trace!(target: "niri::gestures", dx = delta_x, dy = delta_y, ?recognized, action = ?swipe.action, "swipe update");
         // Include the movement spent choosing a direction in the first update,
         // rather than making the user repeat that distance after recognition.
         if recognized {
@@ -4926,11 +4894,12 @@ impl State {
     }
 
     fn on_gesture_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
+        tracing::debug!(target: "niri::gestures", device = %event.device().id(), cancelled = event.cancelled(), "swipe end");
         if self
             .niri
             .touchpad_drag
             .as_ref()
-            .is_some_and(|d| d.device_id == event.device().id())
+            .is_some_and(|d| d.device_id == event.device().id() && d.source == DragSource::Swipe)
         {
             self.finish_touchpad_drag(event.time());
             return;
@@ -4949,13 +4918,19 @@ impl State {
         let Some(swipe) = self.niri.touchpad_swipe.take() else {
             return;
         };
+        tracing::debug!(target: "niri::gestures", device = %swipe.device_id, ?cancelled, action = ?swipe.action, direction = ?swipe.direction, cumulative = ?swipe.cumulative, "swipe finished");
         match swipe.action {
             SwipeAction::View { grid, .. } => {
                 self.niri.layout.bound_view_gesture_end(grid, cancelled);
                 self.niri.queue_redraw_all();
             }
             SwipeAction::WorkspaceSwitch(_) => {
-                if let Some(output) = self.niri.layout.workspace_switch_gesture_end(Some(true)) {
+                let output = if cancelled {
+                    self.niri.layout.workspace_switch_gesture_cancel(Some(true))
+                } else {
+                    self.niri.layout.workspace_switch_gesture_end(Some(true))
+                };
+                if let Some(output) = output {
                     self.niri.queue_redraw(&output);
                 }
             }
@@ -4994,6 +4969,52 @@ impl State {
         }
     }
 
+    fn update_touchpad_drag<I: InputBackend>(
+        &mut self,
+        event: &impl Event<I>,
+        source: DragSource,
+        delta: (f64, f64),
+        delta_unaccelerated: (f64, f64),
+    ) -> bool {
+        if !self
+            .niri
+            .touchpad_drag
+            .as_ref()
+            .is_some_and(|d| d.device_id == event.device().id() && d.source == source)
+        {
+            return false;
+        }
+        if self.touchpad_swipes_blocked() {
+            self.finish_touchpad_drag(event.time());
+            return true;
+        }
+        if !delta.0.is_finite() || !delta.1.is_finite() || delta == (0., 0.) {
+            return true;
+        }
+        tracing::trace!(target: "niri::gestures", device = %event.device().id(), ?source, dx = delta.0, dy = delta.1, "three-finger drag update");
+        let mut drag = self.niri.touchpad_drag.take().unwrap();
+        if !drag.pressed {
+            self.on_pointer_button::<I>(GesturePointerEvent {
+                source: event,
+                delta,
+                delta_unaccelerated,
+                state: ButtonState::Pressed,
+            });
+            if self.niri.suppressed_buttons.remove(&0x110) {
+                return true;
+            }
+            drag.pressed = true;
+        }
+        self.on_pointer_motion::<I>(GesturePointerEvent {
+            source: event,
+            delta,
+            delta_unaccelerated,
+            state: ButtonState::Pressed,
+        });
+        self.niri.touchpad_drag = Some(drag);
+        true
+    }
+
     pub(crate) fn finish_touchpad_drag(&mut self, time: smithay::backend::input::InputTime) {
         let Some(drag) = self.niri.touchpad_drag.take() else {
             return;
@@ -5015,12 +5036,34 @@ impl State {
     }
 
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
+        tracing::debug!(target: "niri::gestures", device = %event.device().id(), fingers = event.fingers(), "pinch begin");
         self.finish_touchpad_drag(event.time());
         self.finish_touchpad_resize();
         self.finish_touchpad_pinch(event.time(), true);
         self.finish_touchpad_swipe(event.time(), true);
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
+        let gesture_drag = {
+            let config = self.niri.config.borrow();
+            config.input.touchpad.three_finger_drag
+                && config.input.touchpad.three_finger_drag_mode
+                    == niri_config::input::ThreeFingerDragMode::Gesture
+                && event.fingers() == 3
+        };
+        if gesture_drag {
+            if !self.touchpad_swipes_blocked()
+                && !pointer.is_grabbed()
+                && self.niri.physical_pointer_buttons.is_empty()
+                && self.niri.suppressed_buttons.is_empty()
+            {
+                self.niri.touchpad_drag = Some(TouchpadDrag {
+                    device_id: event.device().id(),
+                    pressed: false,
+                    source: DragSource::Pinch,
+                });
+            }
+            return;
+        }
         let pinch = TouchpadPinch::new(
             event.device().id(),
             event.fingers(),
@@ -5047,7 +5090,17 @@ impl State {
         );
     }
 
-    fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
+    fn on_gesture_pinch_update<I: InputBackend + 'static>(
+        &mut self,
+        event: I::GesturePinchUpdateEvent,
+    ) {
+        let delta = (event.delta_x(), event.delta_y());
+        let raw = (&event as &dyn Any)
+            .downcast_ref::<input::event::gesture::GesturePinchUpdateEvent>()
+            .map_or(delta, |e| (e.dx_unaccelerated(), e.dy_unaccelerated()));
+        if self.update_touchpad_drag::<I>(&event, DragSource::Pinch, delta, raw) {
+            return;
+        }
         let Some(mut pinch) = self.niri.touchpad_pinch.take() else {
             return;
         };
@@ -5060,9 +5113,16 @@ impl State {
             self.finish_touchpad_pinch(event.time(), true);
             return;
         }
-        pinch.translation.0 += event.delta_x();
-        pinch.translation.1 += event.delta_y();
-        if pinch.recognize(event.scale()) {
+        if !raw.0.is_finite() || !raw.1.is_finite() {
+            self.niri.touchpad_pinch = Some(pinch);
+            return;
+        }
+        // Recognition must not depend on the user's pointer acceleration setting.
+        pinch.translation.0 += raw.0;
+        pinch.translation.1 += raw.1;
+        let recognized = pinch.recognize(event.scale());
+        tracing::trace!(target: "niri::gestures", dx = delta.0, dy = delta.1, scale = event.scale(), rotation = event.rotation(), ?recognized, action = ?pinch.action, "pinch update");
+        if recognized {
             // Resolve on the same output that the bound action will operate on.
             if matches!(
                 pinch.action,
@@ -5138,6 +5198,16 @@ impl State {
     }
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
+        tracing::debug!(target: "niri::gestures", device = %event.device().id(), cancelled = event.cancelled(), "pinch end");
+        if self
+            .niri
+            .touchpad_drag
+            .as_ref()
+            .is_some_and(|d| d.device_id == event.device().id() && d.source == DragSource::Pinch)
+        {
+            self.finish_touchpad_drag(event.time());
+            return;
+        }
         if self
             .niri
             .touchpad_pinch
@@ -5152,6 +5222,7 @@ impl State {
         let Some(pinch) = self.niri.touchpad_pinch.take() else {
             return;
         };
+        tracing::debug!(target: "niri::gestures", device = %pinch.device_id, ?cancelled, action = ?pinch.action, direction = ?pinch.direction, "pinch finished");
         match pinch.action {
             SwipeAction::View { grid, .. } => {
                 self.niri.layout.bound_view_gesture_end(grid, cancelled);
