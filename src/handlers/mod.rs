@@ -462,6 +462,7 @@ impl SessionLockHandler for State {
     }
 
     fn lock(&mut self, confirmation: SessionLocker) {
+        self.finish_touchpad_drag(smithay::backend::input::InputTime::now());
         self.niri.lock(confirmation);
     }
 

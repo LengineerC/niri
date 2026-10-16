@@ -1205,6 +1205,7 @@ mod tests {
                         true,
                     ),
                     three_finger_drag: false,
+                    three_finger_drag_mode: Gesture,
                     drag_lock: false,
                     natural_scroll: false,
                     click_method: Some(

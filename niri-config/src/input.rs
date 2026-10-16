@@ -197,6 +197,8 @@ pub struct Touchpad {
     pub drag: Option<bool>,
     #[knuffel(child, unwrap(argument), default)]
     pub three_finger_drag: bool,
+    #[knuffel(child, unwrap(argument), default)]
+    pub three_finger_drag_mode: ThreeFingerDragMode,
     #[knuffel(child)]
     pub drag_lock: bool,
     #[knuffel(child)]
@@ -225,6 +227,15 @@ pub struct Touchpad {
     pub scroll_factor: Option<ScrollFactor>,
     #[knuffel(child, unwrap(argument))]
     pub pinch_sensitivity: Option<FloatOrInt<0, 100>>,
+}
+
+#[derive(knuffel::DecodeScalar, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ThreeFingerDragMode {
+    /// Convert libinput three-finger swipes into pointer dragging in the compositor.
+    #[default]
+    Gesture,
+    /// Use libinput's native drag recognizer, including its swipe/drag arbitration.
+    Native,
 }
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]

@@ -58,7 +58,7 @@ The built-in swipes are configurable and retain their finger-following animation
 Use `swipe fingers=4 direction="up" { open-overview; }` to bind a direction to any action accepted in `binds`.
 Each binding takes exactly one action. Supported counts are `3`–`5`; directions are `left`, `right`, `up`, and `down`.
 Directions refer to physical finger movement and do not invert with `natural-scroll`.
-Near-diagonal startup motion is left undecided until one axis is clearly dominant (at least 1.35 times the other). Small movements require a second consistent directional sample; a clear movement over twice the threshold can be recognized immediately. This avoids locking the axis based on an incidental first movement.
+Near-diagonal startup motion is left undecided until the dominant axis reaches the threshold and leads the other axis by at least half the threshold. Short back-and-forth movement must also have net displacement of at least 65% of its path length. Clear motion is recognized without waiting for another event; the decision depends on displacement rather than packet count. Once selected, the direction stays locked until release.
 The built-in scrolling gestures continue to honor natural scrolling as before.
 
 Bindings take precedence over built-in gestures in that direction. Otherwise, workspace switching takes precedence over view scrolling, then overview.
@@ -79,7 +79,7 @@ Use `pinch fingers=4 direction="in" { open-grid-overview; }` or `direction="out"
 
 `pinch-threshold` controls recognition in percent of logarithmic scale (default `1`, range `1`–`50`); the default is approximately a 1% scale change. `pinch-sensitivity` scales view-transition progress (default `2.5`, range `1`–`10`); larger values need less movement. With the default sensitivity, approximately 10% scale change is enough to settle toward the new view state on release, and a factor of 0.82 inward or 1.22 outward spans a full transition. These settings are separate from `input.touchpad.pinch-sensitivity`, which affects client application zoom only.
 
-Small pinches require consistent direction over two samples. Clear scale changes of at least 4% can be recognized immediately. When substantial translation accompanies less than 6% logarithmic scale change, niri waits for stronger pinch evidence instead of opening a view from finger-placement drift. These checks operate on gestures reported by libinput, not raw finger contacts.
+Small pinches require continued scale change in the same direction (an additional quarter of the effective threshold); repeated stationary packets cannot confirm a pinch. Scale change reaching twice the effective threshold is recognized immediately. Centroid translation smoothly raises the effective logarithmic scale threshold by 0.15 percentage points per pixel, capped at 3%, without lowering the configured threshold. This filters placement drift while allowing off-center pinches. These checks operate on gestures reported by libinput, not raw finger contacts.
 
 `view-transition-max-speed` caps the displayed progress of gesture-driven grid/overview transitions (default `4`, range `1`–`20`, in full transitions per second). At `4`, a full-range transition takes at least 250 ms; use `3` for at least 333 ms. Input targets remain responsive, while displayed progress catches up at the capped rate, including after release or cancellation. Release decisions use the input target, not the lagging display. This applies to configured swipe/pinch view actions and the built-in overview gesture; keyboard-triggered animations retain their existing animation settings.
 
@@ -111,7 +111,7 @@ gestures {
 }
 ```
 
-This provides native three-finger dragging, interactive four-finger vertical workspace switching, horizontal window focus, and interactive pinch transitions.
+This provides three-finger dragging, interactive four-finger vertical workspace switching, horizontal window focus, and interactive pinch transitions.
 Grid overview is a workspace-wide window picker, not macOS's application-only App Exposé.
 To use vertical swiping for overview instead, set `workspace-switch-fingers 0` and `overview-fingers 4`, and remove any explicit up/down swipe bindings.
 The complete example is also available in `resources/mac-touchpad.kdl`.

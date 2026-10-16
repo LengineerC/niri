@@ -1,8 +1,9 @@
 // Merge these settings into your config, or include this file from config.kdl.
-// Requires niri built with libinput >= 1.28 and a supporting touchpad.
+// Requires a touchpad reporting three-/four-finger gestures through libinput.
 input {
     touchpad {
         three-finger-drag true
+        three-finger-drag-mode "gesture"
         natural-scroll
     }
 }

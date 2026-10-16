@@ -13,6 +13,26 @@ pub struct TestInputBackend;
 #[derive(PartialEq, Eq, Hash)]
 pub struct TestInputDevice;
 
+pub struct TestButtonEvent(pub smithay::backend::input::ButtonState);
+
+impl Event<TestInputBackend> for TestButtonEvent {
+    fn time(&self) -> InputTime {
+        InputTime::now()
+    }
+    fn device(&self) -> TestInputDevice {
+        TestInputDevice
+    }
+}
+
+impl smithay::backend::input::PointerButtonEvent<TestInputBackend> for TestButtonEvent {
+    fn button_code(&self) -> u32 {
+        0x110
+    }
+    fn state(&self) -> smithay::backend::input::ButtonState {
+        self.0
+    }
+}
+
 pub struct TestAxisEvent {
     pub source: smithay::backend::input::AxisSource,
     pub horizontal: Option<f64>,
@@ -123,7 +143,7 @@ impl InputBackend for TestInputBackend {
 
     type KeyboardKeyEvent = TestKeyboardKeyEvent;
     type PointerAxisEvent = TestAxisEvent;
-    type PointerButtonEvent = UnusedEvent;
+    type PointerButtonEvent = TestButtonEvent;
     type PointerMotionEvent = UnusedEvent;
     type PointerMotionAbsoluteEvent = UnusedEvent;
 

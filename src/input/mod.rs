@@ -70,7 +70,9 @@ pub mod scroll_tracker;
 pub mod spatial_movement_grab;
 pub mod swipe_tracker;
 pub mod touch_overview_grab;
+pub mod touchpad_drag;
 pub mod touchpad_swipe;
+use touchpad_drag::{GesturePointerEvent, TouchpadDrag};
 
 use touchpad_swipe::{
     configure_three_finger_drag, SwipeAction, TouchpadPinch, TouchpadResize, TouchpadSwipe,
@@ -197,7 +199,15 @@ impl State {
             Keyboard { event } => self.on_keyboard::<I>(event, &mut consumed_by_a11y),
             PointerMotion { event } => self.on_pointer_motion::<I>(event),
             PointerMotionAbsolute { event } => self.on_pointer_motion_absolute::<I>(event),
-            PointerButton { event } => self.on_pointer_button::<I>(event),
+            PointerButton { event } => {
+                let key = (event.device().id(), event.button_code());
+                if event.state() == ButtonState::Pressed {
+                    self.niri.physical_pointer_buttons.insert(key);
+                } else {
+                    self.niri.physical_pointer_buttons.remove(&key);
+                }
+                self.on_pointer_button::<I>(event);
+            }
             PointerAxis { event } => self.on_pointer_axis::<I>(event),
             TabletToolAxis { event } => self.on_tablet_tool_axis::<I>(event),
             TabletToolTip { event } => self.on_tablet_tool_tip::<I>(event),
@@ -295,6 +305,17 @@ impl State {
     }
 
     fn on_device_removed(&mut self, device: impl Device) {
+        self.niri
+            .physical_pointer_buttons
+            .retain(|(id, _)| *id != device.id());
+        if self
+            .niri
+            .touchpad_drag
+            .as_ref()
+            .is_some_and(|d| d.device_id == device.id())
+        {
+            self.finish_touchpad_drag(smithay::backend::input::InputTime::now());
+        }
         if self
             .niri
             .touchpad_pinch
@@ -2754,7 +2775,7 @@ impl State {
         }
     }
 
-    fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
+    fn on_pointer_motion<I: InputBackend>(&mut self, event: impl PointerMotionEvent<I>) {
         let was_inside_hot_corner = self.niri.pointer_inside_hot_corner;
         // Any of the early returns here mean that the pointer is not inside the hot corner.
         self.niri.pointer_inside_hot_corner = false;
@@ -3135,7 +3156,8 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
-    fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
+    fn on_pointer_button<I: InputBackend>(&mut self, event: impl PointerButtonEvent<I>) {
+        self.finish_touchpad_drag(event.time());
         self.finish_touchpad_resize();
         self.finish_touchpad_swipe(event.time(), true);
         self.finish_touchpad_pinch(event.time(), true);
@@ -4652,16 +4674,35 @@ impl State {
     }
 
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
+        self.finish_touchpad_drag(event.time());
         self.finish_touchpad_pinch(event.time(), true);
         self.finish_touchpad_resize();
         self.finish_touchpad_swipe(event.time(), true);
         let pointer = self.niri.seat.get_pointer().unwrap();
         let blocked = self.touchpad_swipes_blocked() || pointer.is_grabbed();
+        let gesture_drag = {
+            let config = self.niri.config.borrow();
+            config.input.touchpad.three_finger_drag
+                && config.input.touchpad.three_finger_drag_mode
+                    == niri_config::input::ThreeFingerDragMode::Gesture
+                && event.fingers() == 3
+        };
+        if gesture_drag
+            && !blocked
+            && self.niri.physical_pointer_buttons.is_empty()
+            && self.niri.suppressed_buttons.is_empty()
+        {
+            self.niri.touchpad_drag = Some(TouchpadDrag {
+                device_id: event.device().id(),
+                pressed: false,
+            });
+            return;
+        }
         let swipe = TouchpadSwipe::new(
             event.device().id(),
             event.fingers(),
             self.niri.config.borrow().gestures.clone(),
-            blocked,
+            blocked || gesture_drag,
         );
         let action = swipe.action.clone();
         self.niri.touchpad_swipe = Some(swipe);
@@ -4693,6 +4734,48 @@ impl State {
     ) where
         I::Device: 'static,
     {
+        if let Some(mut drag) = self.niri.touchpad_drag.take() {
+            if drag.device_id != event.device().id() {
+                self.niri.touchpad_drag = Some(drag);
+                return;
+            }
+            if self.touchpad_swipes_blocked() {
+                self.niri.touchpad_drag = Some(drag);
+                self.finish_touchpad_drag(event.time());
+                return;
+            }
+            let delta = (event.delta_x(), event.delta_y());
+            let delta_unaccelerated = (&event as &dyn Any)
+                .downcast_ref::<input::event::gesture::GestureSwipeUpdateEvent>()
+                .map_or(delta, |event| {
+                    (event.dx_unaccelerated(), event.dy_unaccelerated())
+                });
+            if !delta.0.is_finite() || !delta.1.is_finite() || delta == (0., 0.) {
+                self.niri.touchpad_drag = Some(drag);
+                return;
+            }
+            if !drag.pressed {
+                self.on_pointer_button::<I>(GesturePointerEvent {
+                    source: &event,
+                    delta,
+                    delta_unaccelerated,
+                    state: ButtonState::Pressed,
+                });
+                // A configured mouse binding may have consumed the press.
+                if self.niri.suppressed_buttons.remove(&0x110) {
+                    return;
+                }
+                drag.pressed = true;
+            }
+            self.on_pointer_motion::<I>(GesturePointerEvent {
+                source: &event,
+                delta,
+                delta_unaccelerated,
+                state: ButtonState::Pressed,
+            });
+            self.niri.touchpad_drag = Some(drag);
+            return;
+        }
         let Some(mut swipe) = self.niri.touchpad_swipe.take() else {
             return;
         };
@@ -4845,6 +4928,15 @@ impl State {
     fn on_gesture_swipe_end<I: InputBackend>(&mut self, event: I::GestureSwipeEndEvent) {
         if self
             .niri
+            .touchpad_drag
+            .as_ref()
+            .is_some_and(|d| d.device_id == event.device().id())
+        {
+            self.finish_touchpad_drag(event.time());
+            return;
+        }
+        if self
+            .niri
             .touchpad_swipe
             .as_ref()
             .is_some_and(|s| s.device_id == event.device().id())
@@ -4902,7 +4994,28 @@ impl State {
         }
     }
 
+    pub(crate) fn finish_touchpad_drag(&mut self, time: smithay::backend::input::InputTime) {
+        let Some(drag) = self.niri.touchpad_drag.take() else {
+            return;
+        };
+        if drag.pressed {
+            let pointer = self.niri.seat.get_pointer().unwrap();
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button: 0x110,
+                    state: ButtonState::Released,
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                },
+            );
+            pointer.frame(self);
+            self.niri.queue_redraw_all();
+        }
+    }
+
     fn on_gesture_pinch_begin<I: InputBackend>(&mut self, event: I::GesturePinchBeginEvent) {
+        self.finish_touchpad_drag(event.time());
         self.finish_touchpad_resize();
         self.finish_touchpad_pinch(event.time(), true);
         self.finish_touchpad_swipe(event.time(), true);
@@ -6023,7 +6136,11 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
             input::SendEventsMode::ENABLED
         });
         let _ = device.config_tap_set_enabled(c.tap);
-        configure_three_finger_drag(device, c.three_finger_drag);
+        configure_three_finger_drag(
+            device,
+            c.three_finger_drag
+                && c.three_finger_drag_mode == niri_config::input::ThreeFingerDragMode::Native,
+        );
         let _ = device.config_dwt_set_enabled(c.dwt);
         let _ = device.config_dwtp_set_enabled(c.dwtp);
         let _ = device.config_tap_set_drag_lock_enabled(if c.drag_lock {

@@ -9,7 +9,7 @@ pub struct TouchpadSwipe {
     pub cumulative: (f64, f64),
     pub direction: Option<SwipeDirection>,
     pub action: SwipeAction,
-    candidate: Option<SwipeDirection>,
+    path_length: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,7 +55,7 @@ impl TouchpadSwipe {
             cumulative: (0., 0.),
             direction: None,
             action,
-            candidate: None,
+            path_length: 0.,
         }
     }
 
@@ -66,19 +66,22 @@ impl TouchpadSwipe {
         }
         self.cumulative.0 += dx;
         self.cumulative.1 += dy;
+        self.path_length += dx.hypot(dy);
         if self.action != SwipeAction::Pending {
             return false;
         }
         let (x, y) = self.cumulative;
-        if x.hypot(y) < self.config.swipe_threshold {
-            self.candidate = None;
-            return false;
-        }
-        // Do not permanently choose an axis from a nearly diagonal first sample.
+        // Require distance evidence, not a number of packets: report rate should
+        // not determine latency. A diagonal start remains undecided until one
+        // axis has a meaningful lead, even on a long, slightly diagonal swipe.
         let major = x.abs().max(y.abs());
         let minor = x.abs().min(y.abs());
-        if major < minor * 1.35 {
-            self.candidate = None;
+        let threshold = self.config.swipe_threshold;
+        if major < threshold || major - minor < threshold * 0.5 {
+            return false;
+        }
+        // Short back-and-forth placement jitter is not directional intent.
+        if major < threshold * 2. && x.hypot(y) < self.path_length * 0.65 {
             return false;
         }
         let direction = if x.abs() > y.abs() {
@@ -92,10 +95,6 @@ impl TouchpadSwipe {
         } else {
             SwipeDirection::Down
         };
-        if self.candidate != Some(direction) && major < self.config.swipe_threshold * 2. {
-            self.candidate = Some(direction);
-            return false;
-        }
         self.direction = Some(direction);
         self.action = if let Some(binding) = self
             .config
@@ -131,7 +130,7 @@ pub struct TouchpadPinch {
     threshold: f64,
     pub sensitivity: f64,
     pub translation: (f64, f64),
-    candidate: Option<PinchDirection>,
+    candidate_scale: Option<f64>,
 }
 
 impl TouchpadPinch {
@@ -186,7 +185,7 @@ impl TouchpadPinch {
             threshold: config.pinch_threshold / 100.,
             sensitivity: config.pinch_sensitivity,
             translation: (0., 0.),
-            candidate: None,
+            candidate_scale: None,
         }
     }
 
@@ -194,8 +193,14 @@ impl TouchpadPinch {
         if self.action != SwipeAction::Pending || !scale.is_finite() || scale <= 0. {
             return false;
         }
-        if scale.ln().abs() < self.threshold {
-            self.candidate = None;
+        let log_scale = scale.ln();
+        // Raise the evidence requirement smoothly when the centroid translates.
+        // No discontinuous 8px/6% gate, which penalized legitimate off-center pinches.
+        let threshold = self
+            .threshold
+            .max((self.translation.0.hypot(self.translation.1) * 0.0015).min(0.03));
+        if log_scale.abs() < threshold {
+            self.candidate_scale = None;
             return false;
         }
         let direction = if scale < 1. {
@@ -203,15 +208,19 @@ impl TouchpadPinch {
         } else {
             PinchDirection::Out
         };
-        // Translation with tiny scale changes is usually finger placement drift,
-        // not a deliberate pinch. Keep collecting evidence instead of locking it.
-        if self.translation.0.hypot(self.translation.1) > 8. && scale.ln().abs() < 0.06 {
-            self.candidate = None;
-            return false;
-        }
-        if self.candidate != Some(direction) && scale.ln().abs() < self.threshold.max(0.04) {
-            self.candidate = Some(direction);
-            return false;
+        if log_scale.abs() < threshold * 2. {
+            match self.candidate_scale {
+                Some(previous) if previous.signum() == log_scale.signum() => {
+                    // Repeated stationary packets must not confirm a pinch.
+                    if log_scale.abs() - previous.abs() < threshold * 0.25 {
+                        return false;
+                    }
+                }
+                _ => {
+                    self.candidate_scale = Some(log_scale);
+                    return false;
+                }
+            }
         }
         self.direction = Some(direction);
         self.action = self
@@ -270,11 +279,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn swipe_direction_is_symmetric_and_independent_of_packet_count() {
+        for (dx, dy) in [(12., 0.), (-12., 0.), (0., 12.), (0., -12.), (20., 15.)] {
+            let mut single = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
+            let mut split = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
+            assert!(single.recognize(dx, dy));
+            for _ in 0..10 {
+                split.recognize(dx / 10., dy / 10.);
+            }
+            assert_eq!(single.direction, split.direction);
+            assert_eq!(single.action, split.action);
+        }
+    }
+
+    #[test]
+    fn startup_jitter_waits_for_clear_motion() {
+        let mut swipe = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
+        assert!(!swipe.recognize(6., 0.));
+        assert!(!swipe.recognize(-6., 0.));
+        assert!(!swipe.recognize(8., 0.));
+        assert!(swipe.recognize(8., 0.));
+        assert_eq!(swipe.direction, Some(SwipeDirection::Right));
+    }
+
+    #[test]
     fn diagonal_start_does_not_lock_wrong_swipe_axis() {
         let mut swipe = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
         assert!(!swipe.recognize(7., 6.));
-        assert!(!swipe.recognize(1., 6.));
-        assert!(swipe.recognize(0., 4.));
+        assert!(swipe.recognize(1., 6.));
         assert_eq!(
             swipe.action,
             SwipeAction::WorkspaceSwitch(SwipeAxis::Vertical)
@@ -299,11 +331,13 @@ mod tests {
         assert_eq!(pinch.sensitivity, 2.5);
         assert!(!pinch.recognize(1.005));
         assert!(!pinch.recognize(1.02));
-        assert!(pinch.recognize(1.02));
+        assert!(!pinch.recognize(1.02));
+        assert!(pinch.recognize(1.03));
         assert_eq!(pinch.action, SwipeAction::Binding(Action::OpenOverview));
         let mut pinch = TouchpadPinch::new("a".into(), 4, &config, false);
         assert!(!pinch.recognize(1. / 1.02));
-        assert!(pinch.recognize(1. / 1.02));
+        assert!(!pinch.recognize(1. / 1.02));
+        assert!(pinch.recognize(1. / 1.03));
         assert_eq!(pinch.action, SwipeAction::Binding(Action::OpenGridOverview));
         assert_eq!(pinch.sensitivity, 1.);
     }
@@ -313,8 +347,7 @@ mod tests {
         let mut horizontal = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
         assert!(!horizontal.recognize(4., 0.));
         assert_eq!(horizontal.action, SwipeAction::Pending);
-        assert!(!horizontal.recognize(4., 0.));
-        assert!(horizontal.recognize(1., 0.));
+        assert!(horizontal.recognize(4., 0.));
         assert_eq!(
             horizontal.action,
             SwipeAction::Binding(Action::FocusColumnLeft)
@@ -335,8 +368,7 @@ mod tests {
             SwipeAction::Forwarded
         );
         let mut left = TouchpadSwipe::new("a".into(), 4, Gestures::default(), false);
-        assert!(!left.recognize(-8., 0.));
-        assert!(left.recognize(-1., 0.));
+        assert!(left.recognize(-8., 0.));
         assert_eq!(left.action, SwipeAction::Binding(Action::FocusColumnRight));
     }
 

@@ -53,6 +53,158 @@ fn end(f: &mut Fixture, cancelled: bool) {
         });
 }
 
+fn drag_begin(f: &mut Fixture) {
+    f.niri_state()
+        .process_input_event::<TestInputBackend>(InputEvent::GestureSwipeBegin {
+            event: TestSwipeEvent {
+                fingers: 3,
+                ..Default::default()
+            },
+        });
+}
+
+fn drag_update(f: &mut Fixture, dx: f64, dy: f64) {
+    f.niri_state()
+        .process_input_event::<TestInputBackend>(InputEvent::GestureSwipeUpdate {
+            event: TestSwipeEvent {
+                dx,
+                dy,
+                ..Default::default()
+            },
+        });
+}
+
+#[test]
+fn three_finger_drag_starts_in_every_direction_and_releases() {
+    for (dx, dy) in [
+        (4., 0.),
+        (-4., 0.),
+        (0., 4.),
+        (0., -4.),
+        (3., 3.),
+        (-3., -3.),
+    ] {
+        let mut f = fixture();
+        f.niri()
+            .config
+            .borrow_mut()
+            .input
+            .touchpad
+            .three_finger_drag = true;
+        drag_begin(&mut f);
+        assert!(!f.niri().touchpad_drag.as_ref().unwrap().pressed);
+        drag_update(&mut f, dx, dy);
+        assert!(f.niri().touchpad_drag.as_ref().unwrap().pressed);
+        assert!(f.niri().touchpad_swipe.is_none());
+        end(&mut f, false);
+        assert!(f.niri().touchpad_drag.is_none());
+    }
+}
+
+#[test]
+fn three_finger_drag_moves_pointer_on_both_axes() {
+    let mut f = fixture();
+    f.niri()
+        .config
+        .borrow_mut()
+        .input
+        .touchpad
+        .three_finger_drag = true;
+    drag_begin(&mut f);
+    let pointer = f.niri().seat.get_pointer().unwrap();
+    let before = pointer.current_location();
+    drag_update(&mut f, 12., 7.);
+    let after = pointer.current_location();
+    assert_eq!(after - before, (12., 7.).into());
+    end(&mut f, true);
+    assert!(f.niri().touchpad_drag.is_none());
+}
+
+#[test]
+fn three_finger_drag_cancels_on_removal_and_finger_count_change() {
+    let mut f = fixture();
+    f.niri()
+        .config
+        .borrow_mut()
+        .input
+        .touchpad
+        .three_finger_drag = true;
+    drag_begin(&mut f);
+    drag_update(&mut f, 5., 0.);
+    begin(&mut f);
+    assert!(f.niri().touchpad_drag.is_none());
+    assert!(f.niri().touchpad_swipe.is_some());
+    end(&mut f, true);
+    drag_begin(&mut f);
+    drag_update(&mut f, 0., 5.);
+    f.niri_state()
+        .process_input_event::<TestInputBackend>(InputEvent::DeviceRemoved {
+            device: TestInputDevice,
+        });
+    assert!(f.niri().touchpad_drag.is_none());
+}
+
+#[test]
+fn native_three_finger_drag_does_not_synthesize_pointer_input() {
+    let mut f = fixture();
+    {
+        let mut config = f.niri().config.borrow_mut();
+        config.input.touchpad.three_finger_drag = true;
+        config.input.touchpad.three_finger_drag_mode =
+            niri_config::input::ThreeFingerDragMode::Native;
+    }
+    drag_begin(&mut f);
+    drag_update(&mut f, 20., 0.);
+    assert!(f.niri().touchpad_drag.is_none());
+}
+
+#[test]
+fn three_finger_drag_does_not_release_physical_mouse_button() {
+    use super::test_input_backend::TestButtonEvent;
+    use smithay::backend::input::ButtonState;
+    let mut f = fixture();
+    f.niri()
+        .config
+        .borrow_mut()
+        .input
+        .touchpad
+        .three_finger_drag = true;
+    f.niri_state()
+        .process_input_event::<TestInputBackend>(InputEvent::PointerButton {
+            event: TestButtonEvent(ButtonState::Pressed),
+        });
+    drag_begin(&mut f);
+    drag_update(&mut f, 20., 0.);
+    assert!(f.niri().touchpad_drag.is_none());
+    end(&mut f, false);
+    f.niri_state()
+        .process_input_event::<TestInputBackend>(InputEvent::PointerButton {
+            event: TestButtonEvent(ButtonState::Released),
+        });
+    drag_begin(&mut f);
+    drag_update(&mut f, 20., 0.);
+    assert!(f.niri().touchpad_drag.as_ref().unwrap().pressed);
+    f.niri_state()
+        .process_input_event::<TestInputBackend>(InputEvent::PointerButton {
+            event: TestButtonEvent(ButtonState::Pressed),
+        });
+    assert!(f.niri().touchpad_drag.is_none());
+}
+
+#[test]
+fn three_finger_drag_modes_parse() {
+    use niri_config::input::ThreeFingerDragMode;
+    for (name, mode) in [
+        ("gesture", ThreeFingerDragMode::Gesture),
+        ("native", ThreeFingerDragMode::Native),
+    ] {
+        let config = Config::parse_mem(&format!(r#"input {{ touchpad {{ three-finger-drag true; three-finger-drag-mode "{name}"; }}; }}"#)).unwrap();
+        assert!(config.input.touchpad.three_finger_drag);
+        assert_eq!(config.input.touchpad.three_finger_drag_mode, mode);
+    }
+    assert!(Config::parse_mem(include_str!("../../resources/mac-touchpad.kdl")).is_ok());
+}
+
 #[test]
 fn swipe_binding_fires_once_on_release() {
     let mut f = fixture();
