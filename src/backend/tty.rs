@@ -28,6 +28,7 @@ use smithay::backend::drm::{
 };
 use smithay::backend::egl::context::ContextPriority;
 use smithay::backend::egl::{EGLDevice, EGLDisplay};
+use smithay::backend::input::InputTime;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::multigpu::gbm::GbmGlesBackend;
@@ -617,6 +618,14 @@ impl Tty {
         match event {
             SessionEvent::PauseSession => {
                 debug!("pausing session");
+
+                // We won't receive key or button releases for whatever is held down while the
+                // session is paused, so forget about all of it.
+                //
+                // Slightly cursed to do from an idle... But we don't have State here conveniently,
+                // and it should be fine to delay this until the loop callback.
+                niri.event_loop
+                    .insert_idle(|state| state.release_held_inputs(InputTime::now()));
 
                 self.libinput.suspend();
 
@@ -1275,12 +1284,20 @@ impl Tty {
         let disable_monitor_names = self.config.borrow().debug.disable_monitor_names;
         let output_name = device.known_crtc_name(&crtc, &connector, disable_monitor_names);
 
-        let non_desktop = find_drm_property(&device.drm, connector.handle(), "non-desktop")
+        let non_desktop_prop = find_drm_property(&device.drm, connector.handle(), "non-desktop")
             .and_then(|(_, info, value)| info.value_type().convert_value(value).as_boolean())
             .unwrap_or(false);
 
-        if non_desktop {
+        let config_drm_lease = self
+            .config
+            .borrow()
+            .outputs
+            .find(&output_name)
+            .is_some_and(|o| o.drm_lease);
+
+        if non_desktop_prop || config_drm_lease {
             debug!("output is non desktop");
+
             let description = output_name.format_description();
             if let Some(lease_state) = &mut device.drm_lease_state {
                 lease_state.add_connector::<State>(connector.handle(), connector_name, description);
@@ -1609,6 +1626,11 @@ impl Tty {
             {
                 debug!("withdrawing non-desktop connector from DRM leasing");
 
+                // Revoke any ongoing lease.
+                device
+                    .active_leases
+                    .retain(|l| !l.connectors().any(|connector| connector == conn));
+
                 let conn = *conn;
                 device.non_desktop_connectors.remove(&(conn, crtc));
 
@@ -1761,6 +1783,14 @@ impl Tty {
                     "unexpected redraw state for output {name} (should be WaitingForVBlank); \
                      can happen when resuming from sleep or powering on monitors: {state:?}"
                 );
+
+                // Remove the leftover timer.
+                if let RedrawState::WaitingForEstimatedVBlank(token)
+                | RedrawState::WaitingForEstimatedVBlankAndQueued(token) = state
+                {
+                    niri.event_loop.remove(token);
+                }
+
                 true
             }
         };
@@ -1823,40 +1853,8 @@ impl Tty {
 
             niri.queue_redraw(&output);
         } else {
-            niri.send_frame_callbacks(&output);
-        }
-    }
-
-    fn on_estimated_vblank_timer(&self, niri: &mut Niri, output: Output) {
-        let span = tracy_client::span!("Tty::on_estimated_vblank_timer");
-
-        let name = output.name();
-        span.emit_text(&name);
-
-        let Some(output_state) = niri.output_state.get_mut(&output) else {
-            error!("missing output state for {name}");
-            return;
-        };
-
-        // We waited for the timer, now we can send frame callbacks again.
-        output_state.frame_callback_sequence = output_state.frame_callback_sequence.wrapping_add(1);
-
-        match mem::replace(&mut output_state.redraw_state, RedrawState::Idle) {
-            RedrawState::Idle => unreachable!(),
-            RedrawState::Queued => unreachable!(),
-            RedrawState::WaitingForVBlank { .. } => unreachable!(),
-            RedrawState::WaitingForEstimatedVBlank(_) => (),
-            // The timer fired just in front of a redraw.
-            RedrawState::WaitingForEstimatedVBlankAndQueued(_) => {
-                output_state.redraw_state = RedrawState::Queued;
-                return;
-            }
-        }
-
-        if output_state.unfinished_animations_remain {
-            niri.queue_redraw(&output);
-        } else {
-            niri.send_frame_callbacks(&output);
+            let monitors_active = niri.monitors_active && self.is_active();
+            niri.send_frame_callbacks(&output, monitors_active);
         }
     }
 
@@ -1905,6 +1903,10 @@ impl Tty {
         };
 
         span.emit_text(&surface.name.connector);
+
+        // We'll put it back after successfully submitting a frame.
+        // Otherwise, we won't be expecting a VBlank.
+        let vblank_frame = surface.vblank_frame.take();
 
         if !device.drm.is_active() {
             // This branch hits any time we try to render while the user had switched to a
@@ -2022,10 +2024,21 @@ impl Tty {
                             output_state.frame_callback_sequence =
                                 output_state.frame_callback_sequence.wrapping_add(1);
 
+                            // Put the Tracy frame back since we are expecting a VBlank.
+                            surface.vblank_frame = vblank_frame;
+
                             return RenderResult::Submitted;
                         }
                         Err(err) => {
                             warn!("error queueing frame: {err}");
+
+                            // This error can happen when we're trying to lock the session while on
+                            // another TTY, switch to this TTY, then try to draw the first red
+                            // background frame, and it fails to queue. In this case, the
+                            // framebuffer is not cleared, and we must attempt to queue the frame
+                            // again. Reset the buffer ages, so that the damage tracker doesn't
+                            // prevent us from submitting the same red frame.
+                            drm_compositor.reset_buffer_ages();
                         }
                     }
                 } else {
@@ -2037,12 +2050,6 @@ impl Tty {
                 warn!("error rendering frame: {err}");
             }
         }
-
-        // We're not expecting a vblank right after this.
-        drop(surface.vblank_frame.take());
-
-        // Queue a timer to fire at the predicted vblank time.
-        queue_estimated_vblank_timer(niri, output.clone(), target_presentation_time);
 
         rv
     }
@@ -2305,6 +2312,10 @@ impl Tty {
         }
     }
 
+    pub fn is_active(&self) -> bool {
+        self.session.is_active()
+    }
+
     pub fn set_output_on_demand_vrr(&mut self, niri: &mut Niri, output: &Output, enable_vrr: bool) {
         let _span = tracy_client::span!("Tty::set_output_on_demand_vrr");
 
@@ -2449,6 +2460,16 @@ impl Tty {
                     continue;
                 };
 
+                if config.drm_lease {
+                    debug!(
+                        "output {:?}: drm-lease enabled, reinitializing for leasing",
+                        surface.name.connector
+                    );
+                    to_disconnect.push((node, crtc));
+                    to_connect.push((node, connector.clone(), crtc, surface.name.clone()));
+                    continue;
+                }
+
                 let mut mode = None;
                 if let Some(modeline) = &config.modeline {
                     match calculate_drm_mode_from_modeline(modeline) {
@@ -2563,6 +2584,43 @@ impl Tty {
 
             let config = self.config.borrow();
             let disable_monitor_names = config.debug.disable_monitor_names;
+
+            // stop leasing connectors iff presently leased & no longer configured for lease
+            for &(conn, crtc) in &device.non_desktop_connectors {
+                let Some(connector) = device.drm_scanner.connectors().get(&conn) else {
+                    continue;
+                };
+
+                let output_name = device.known_crtc_name(&crtc, connector, disable_monitor_names);
+                let output_config = config.outputs.find(&output_name);
+
+                // Check if the output was disabled in the config.
+                let off = output_config.is_some_and(|c| c.off);
+                if off || should_disable(&output_name.connector) {
+                    to_disconnect.push((node, crtc));
+                    continue;
+                }
+
+                let non_desktop_prop = find_drm_property(&device.drm, conn, "non-desktop")
+                    .and_then(|(_, info, value)| {
+                        info.value_type().convert_value(value).as_boolean()
+                    })
+                    .unwrap_or(false);
+                if non_desktop_prop {
+                    continue; // always lease connectors w/ non-desktop prop
+                }
+
+                if output_config.is_some_and(|c| c.drm_lease) {
+                    continue;
+                }
+
+                debug!(
+                    "output {:?}: drm-lease disabled, reinitializing as desktop output",
+                    output_name.connector
+                );
+                to_disconnect.push((node, crtc));
+                to_connect.push((node, connector.clone(), crtc, output_name));
+            }
 
             for (connector, crtc) in device.drm_scanner.crtcs() {
                 // Check if connected.
@@ -3064,52 +3122,6 @@ fn suspend() -> anyhow::Result<()> {
     .context("error suspending")?;
 
     Ok(())
-}
-
-fn queue_estimated_vblank_timer(
-    niri: &mut Niri,
-    output: Output,
-    target_presentation_time: Duration,
-) {
-    let output_state = niri.output_state.get_mut(&output).unwrap();
-    match mem::take(&mut output_state.redraw_state) {
-        RedrawState::Idle => unreachable!(),
-        RedrawState::Queued => (),
-        RedrawState::WaitingForVBlank { .. } => unreachable!(),
-        RedrawState::WaitingForEstimatedVBlank(token)
-        | RedrawState::WaitingForEstimatedVBlankAndQueued(token) => {
-            output_state.redraw_state = RedrawState::WaitingForEstimatedVBlank(token);
-            return;
-        }
-    }
-
-    let now = get_monotonic_time();
-    let mut duration = target_presentation_time.saturating_sub(now);
-
-    // No use setting a zero timer, since we'll send frame callbacks anyway right after the call to
-    // render(). This can happen for example with unknown presentation time from DRM.
-    if duration.is_zero() {
-        duration += output_state
-            .frame_clock
-            .refresh_interval()
-            // Unknown refresh interval, i.e. winit backend. Would be good to estimate it somehow
-            // but it's not that important for this code path.
-            .unwrap_or(Duration::from_micros(16_667));
-    }
-
-    trace!("queueing estimated vblank timer to fire in {duration:?}");
-
-    let timer = Timer::from_duration(duration);
-    let token = niri
-        .event_loop
-        .insert_source(timer, move |_, _, data| {
-            data.backend
-                .tty()
-                .on_estimated_vblank_timer(&mut data.niri, output.clone());
-            TimeoutAction::Drop
-        })
-        .unwrap();
-    output_state.redraw_state = RedrawState::WaitingForEstimatedVBlank(token);
 }
 
 pub fn calculate_drm_mode_from_modeline(modeline: &Modeline) -> anyhow::Result<DrmMode> {

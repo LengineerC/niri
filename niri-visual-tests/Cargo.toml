@@ -25,3 +25,6 @@ path = "src/bin/grid_move_headless.rs"
 [[bin]]
 name = "grid-issues-headless"
 path = "src/bin/grid_issues_headless.rs"
+
+[lints]
+workspace = true

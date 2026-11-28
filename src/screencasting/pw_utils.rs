@@ -398,7 +398,6 @@ impl PipeWire {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn start_cast(
         &self,
         gbm: Option<(GbmDevice<DeviceFd>, FormatSet)>,
@@ -483,7 +482,12 @@ impl PipeWire {
                                     debug!("sending signal with {id}");
 
                                     let _span = tracy_client::span!("sending PipeWireStreamAdded");
-                                    if let Err(err) = node_sink.deliver(id) {
+                                    let serial = stream
+                                        .properties()
+                                        .get("object.serial")
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0);
+                                    if let Err(err) = node_sink.deliver(id, serial) {
                                         warn!("error delivering PipeWire node ID: {err:?}");
                                         stop_cast();
                                     }
@@ -1197,7 +1201,6 @@ impl Cast {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn dequeue_buffer_and_render(
         &mut self,
         renderer: &mut GlesRenderer,

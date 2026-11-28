@@ -525,7 +525,7 @@ fn mod_two_finger_gesture_does_not_fall_back_to_wheel_binding() {
     use smithay::backend::input::{AxisSource, InputTime, KeyState, Keycode};
     let mut config =
         Config::parse_mem("binds { Mod+WheelScrollDown { focus-workspace-down; }; }").unwrap();
-    config.binds.0[0].action = Action::TestAction;
+    config.binds.0[0].action = niri_config::BoundAction::Press(Action::TestAction);
     let mut f = Fixture::with_config(config);
     f.add_output(1, (1920, 1080));
     let state = f.niri_state();

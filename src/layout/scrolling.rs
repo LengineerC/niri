@@ -918,7 +918,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         if self.options.layout.center_focused_column == CenterFocusedColumn::OnOverflow
             && 0 < idx
-            && self.data[idx - 1].width + 3. * gaps + width > area.size.w
+            && self.data[idx - 1].width + 3. * gaps + width >= area.size.w
         {
             return self.compute_new_view_offset_for_column_centered(None, idx);
         }
@@ -1499,8 +1499,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         anim_config: Option<niri_config::Animation>,
     ) -> Column<W> {
         let view_pos_before = self.view_pos();
-        let refill_right_edge = anim_config.is_none()
-            && !self.view_offset.is_gesture()
+        let refill_right_edge = !self.view_offset.is_gesture()
             && column_idx == self.active_column_idx
             && 0 < column_idx
             && column_idx + 1 == self.columns.len()
@@ -1557,10 +1556,17 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             self.active_column_idx -= 1;
             self.activate_prev_column_on_removal = None;
         } else if refill_right_edge {
+            for (column, data) in zip(&mut self.columns, &mut self.data) {
+                column.update_tile_sizes(false);
+                data.update(column);
+            }
             let target_idx = self.columns.len() - 1;
             self.activate_column_with_anim_config(target_idx, view_config);
 
-            if !self.is_centering_focused_column() {
+            if self.is_centering_focused_column() {
+                let offset = self.compute_new_view_offset_for_column_centered(None, target_idx);
+                self.animate_view_offset_with_config(target_idx, offset, view_config);
+            } else {
                 let offset = self.compute_new_view_offset_for_rightmost_column(target_idx);
                 self.animate_view_offset_with_config(target_idx, offset, view_config);
             }
@@ -2230,7 +2236,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.columns[self.active_column_idx].focus_bottom()
     }
 
-    pub fn move_column_to_index(&mut self, index: usize) {
+    pub fn move_column_to_index(&mut self, index: usize, focus: bool) {
         let last = self.last_interactive_column();
         let Some(target) = self
             .nth_interactive_column(index.saturating_sub(1))
@@ -2238,10 +2244,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         else {
             return;
         };
-        self.move_column_to(target);
+        self.move_column_to(target, focus);
     }
 
-    fn move_column_to(&mut self, new_idx: usize) {
+    fn move_column_to(&mut self, new_idx: usize, focus: bool) {
         if self.active_column_idx == new_idx {
             return;
         }
@@ -2275,10 +2281,21 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             }
         }
 
-        self.activate_column_with_anim_config(
-            new_idx,
-            self.options.animations.window_movement.anim,
-        );
+        let config = self.options.animations.window_movement.anim;
+        if focus {
+            self.activate_column_with_anim_config(new_idx, config);
+        } else {
+            // Make sure the newly active window stays in view.
+            self.animate_view_offset_to_column_with_config(
+                None,
+                self.active_column_idx,
+                None,
+                config,
+            );
+            // Clear flags since the active window changed.
+            self.activate_prev_column_on_removal = None;
+            self.view_offset_to_restore = None;
+        }
     }
 
     /// Minimizes or restores a window.
@@ -2399,49 +2416,49 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         true
     }
 
-    pub fn move_left(&mut self) -> bool {
+    pub fn move_left(&mut self, focus: bool) -> bool {
         // Move relative to the interactive projection: placeholders are ignored and stay put.
         let Some(target) = self.prev_interactive_column(self.active_column_idx) else {
             return false;
         };
-        self.move_column_to(target);
+        self.move_column_to(target, focus);
         true
     }
 
-    pub fn move_right(&mut self) -> bool {
+    pub fn move_right(&mut self, focus: bool) -> bool {
         let Some(target) = self.next_interactive_column(self.active_column_idx) else {
             return false;
         };
-        self.move_column_to(target);
+        self.move_column_to(target, focus);
         true
     }
 
-    pub fn move_column_to_first(&mut self) {
+    pub fn move_column_to_first(&mut self, focus: bool) {
         if let Some(target) = self.first_interactive_column() {
-            self.move_column_to(target);
+            self.move_column_to(target, focus);
         }
     }
 
-    pub fn move_column_to_last(&mut self) {
+    pub fn move_column_to_last(&mut self, focus: bool) {
         if let Some(target) = self.last_interactive_column() {
-            self.move_column_to(target);
+            self.move_column_to(target, focus);
         }
     }
 
-    pub fn move_down(&mut self) -> bool {
+    pub fn move_down(&mut self, focus: bool) -> bool {
         if self.columns.is_empty() {
             return false;
         }
 
-        self.columns[self.active_column_idx].move_down()
+        self.columns[self.active_column_idx].move_down(focus)
     }
 
-    pub fn move_up(&mut self) -> bool {
+    pub fn move_up(&mut self, focus: bool) -> bool {
         if self.columns.is_empty() {
             return false;
         }
 
-        self.columns[self.active_column_idx].move_up()
+        self.columns[self.active_column_idx].move_up(focus)
     }
 
     pub fn consume_or_expel_window_left(&mut self, window: Option<&W::Id>) {
@@ -2738,7 +2755,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         new_col.tiles[0].animate_move_from(offset);
     }
 
-    pub fn swap_window_in_direction(&mut self, direction: ScrollDirection) {
+    pub fn swap_window_in_direction(&mut self, direction: ScrollDirection, focus: bool) {
         if self.columns.is_empty() {
             return;
         }
@@ -2770,7 +2787,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         if self.columns[source_column_idx].tiles.len() == 1
             && self.columns[target_column_idx].tiles.len() == 1
         {
-            return self.move_column_to(target_column_idx);
+            return self.move_column_to(target_column_idx, focus);
         }
 
         let source_tile_idx = self.columns[source_column_idx].active_tile_idx;
@@ -2864,7 +2881,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .animate_move_from(target_pt - source_pt);
         self.columns[source_column_idx].tiles[source_tile_idx].ensure_alpha_animates_to_1();
 
-        self.activate_column(target_column_idx);
+        if focus {
+            self.activate_column(target_column_idx);
+        } else {
+            // Make sure the column stays in view even after a potentially wider window arrives.
+            self.animate_view_offset_to_column(None, self.active_column_idx, None);
+        }
     }
 
     pub fn toggle_column_tabbed_display(&mut self) {
@@ -3167,32 +3189,59 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
+        let scale = self.scale;
+        let view = Rectangle::from_size(self.view_size);
+        // Use the stationary view offset, consistent with how moving floating windows doesn't spam
+        // the IPC in progress.
+        let view_pos = self.column_x(self.active_column_idx) + self.view_offset.stationary();
+
         // External consumers see the interactive world: placeholder columns take no column
         // number, minimized windows report no position.
         let mut interactive_col_idx = 0;
-        self.columns.iter().flat_map(move |col| {
-            let col_number = if col.has_visible_tiles() {
-                interactive_col_idx += 1;
-                Some(interactive_col_idx)
-            } else {
-                None
-            };
-            let mut visible_tile_idx = 0;
-            col.tiles().map(move |(tile, _)| {
-                let pos = if tile.window().is_minimized() {
-                    None
+        self.columns
+            .iter()
+            .zip(self.column_xs(self.data.iter().copied()))
+            .flat_map(move |(col, col_x)| {
+                let col_number = if col.has_visible_tiles() {
+                    interactive_col_idx += 1;
+                    Some(interactive_col_idx)
                 } else {
-                    visible_tile_idx += 1;
-                    col_number.map(|c| (c, visible_tile_idx))
+                    None
                 };
-                let layout = WindowLayout {
-                    // Our indices are 1-based, consistent with the actions.
-                    pos_in_scrolling_layout: pos,
-                    ..tile.ipc_layout_template()
-                };
-                (tile, layout)
+                // Do not include animated render offset here consistently with floating.
+                let col_off = Point::from((col_x - view_pos, 0.));
+                let mut visible_tile_idx = 0;
+                col.tiles().map(move |(tile, tile_off)| {
+                    // Do not include animated render offset here consistently with floating.
+                    let tile_pos = col_off + tile_off;
+                    // Round to physical pixels.
+                    let tile_pos = tile_pos.to_physical_precise_round(scale).to_logical(scale);
+                    let ipc_position = if tile.window().is_minimized() {
+                        None
+                    } else {
+                        visible_tile_idx += 1;
+                        col_number.map(|c| (c, visible_tile_idx))
+                    };
+                    let mut layout = WindowLayout {
+                        // Our indices are 1-based, consistent with the actions.
+                        pos_in_scrolling_layout: ipc_position,
+                        ..tile.ipc_layout_template()
+                    };
+
+                    if ipc_position.is_some() {
+                        layout.tile_pos_in_workspace_view = Some(tile_pos.into());
+                        // Clear out tile_pos_in_workspace_view for tiles outside of the workspace
+                        // view to avoid IPC spam. E.g. so that any scrolling on a workspace with
+                        // 100 columns didn't have to send 100 window layout changes.
+                        let bbox = Rectangle::new(tile_pos, Size::from(layout.tile_size));
+                        if bbox.intersection(view).is_none() {
+                            layout.tile_pos_in_workspace_view = None;
+                        }
+                    }
+
+                    (tile, layout)
+                })
             })
-        })
     }
 
     pub(super) fn insert_hint_area(
@@ -3671,19 +3720,22 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         true
     }
 
-    pub fn render_above_top_layer(&self) -> bool {
+    pub fn fullscreen_window_above_top_layer(&self) -> Option<&W> {
         // Render above the top layer if we're on a fullscreen window and the view is stationary.
         if self.columns.is_empty() {
-            return false;
+            return None;
         }
 
         if !self.view_offset.is_static() {
-            return false;
+            return None;
         }
 
-        self.columns[self.active_column_idx]
-            .sizing_mode()
-            .is_fullscreen()
+        let col = &self.columns[self.active_column_idx];
+        if !col.sizing_mode().is_fullscreen() {
+            return None;
+        }
+
+        Some(col.tiles[col.active_tile_idx].window())
     }
 
     pub fn render<R: NiriRenderer>(
@@ -3700,8 +3752,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         if layer.is_normal() {
             let view_rect = Rectangle::new(Point::from((self.view_pos(), 0.)), self.view_size);
             for closing in self.closing_windows.iter().rev() {
-                let elem = closing.render(ctx.as_gles(), view_rect, scale);
-                push(elem.into());
+                if let Some(elem) = closing.render(ctx.as_gles(), view_rect, scale) {
+                    push(elem.into());
+                }
             }
         }
 
@@ -3992,6 +4045,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         let end_pos = gesture.tracker.projected_end_pos() * norm_factor;
         let target_view_offset = end_pos + gesture.delta_from_tracker;
 
+        let active_col_x = self.column_x(self.active_column_idx);
+        let current_view_pos = active_col_x + current_view_offset;
+        let target_view_pos = active_col_x + target_view_offset;
+
         // Compute the snapping points. These are where the view aligns with column boundaries on
         // either side.
         struct Snap {
@@ -4042,72 +4099,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             let view_width = self.view_size.w;
             let gaps = self.options.layout.gaps;
 
-            let snap_points =
-                |col_x, col: &Column<W>, prev_col_w: Option<f64>, next_col_w: Option<f64>| {
-                    let col_w = col.width();
-                    let mode = col.sizing_mode();
-
-                    let area = if mode.is_maximized() {
-                        self.parent_area
-                    } else {
-                        self.working_area
-                    };
-
-                    let left_strut = area.loc.x;
-                    let right_strut = self.view_size.w - area.size.w - area.loc.x;
-
-                    // Normal columns align with the working area, but fullscreen columns align with
-                    // the view size.
-                    if mode.is_fullscreen() {
-                        let left = col_x;
-                        let right = left + col_w;
-                        (left, right)
-                    } else {
-                        // Logic from compute_new_view_offset.
-                        let padding = if mode.is_maximized() {
-                            0.
-                        } else {
-                            ((area.size.w - col_w) / 2.).clamp(0., gaps)
-                        };
-
-                        let center = if area.size.w <= col_w {
-                            col_x - left_strut
-                        } else {
-                            col_x - (area.size.w - col_w) / 2. - left_strut
-                        };
-                        let is_overflowing = |adj_col_w: Option<f64>| {
-                            center_on_overflow
-                                && adj_col_w
-                                    .filter(|adj_col_w| {
-                                        // NOTE: This logic won't work entirely correctly with small
-                                        // fixed-size maximized windows (they have a different area
-                                        // and padding).
-                                        center_on_overflow
-                                            && adj_col_w + 3.0 * gaps + col_w > area.size.w
-                                    })
-                                    .is_some()
-                        };
-
-                        let left = if is_overflowing(next_col_w) {
-                            center
-                        } else {
-                            col_x - padding - left_strut
-                        };
-                        let right = if is_overflowing(prev_col_w) {
-                            center + view_width
-                        } else {
-                            col_x + col_w + padding + right_strut
-                        };
-                        (left, right)
-                    }
-                };
-
-            // Prevent the gesture from snapping further than the first/last column, as this is
-            // generally undesired.
+            // The first column's left snap and the last column's right snap, for restricting the
+            // view gesture from easily going past them (since that is generally annoying).
             //
-            // It's ok if leftmost_snap is > rightmost_snap (this happens if the columns on a
-            // workspace total up to less than the workspace width).
-
             // The first column's left snap isn't actually guaranteed to be the *leftmost* snap.
             // With weird enough left strut and perhaps a maximized small fixed-size window, you
             // can make the second window's left snap be further to the left than the first
@@ -4135,67 +4129,122 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 .find(|&i| self.column_is_interactive(i))
                 .unwrap();
 
-            let leftmost_snap = snap_points(
-                self.column_x(first_col_idx),
-                &self.columns[first_col_idx],
-                None,
-                next_interactive_width(first_col_idx),
-            )
-            .0;
-            let rightmost_snap = snap_points(
-                self.column_x(last_col_idx),
-                &self.columns[last_col_idx],
-                prev_interactive_width(last_col_idx),
-                None,
-            )
-            .1 - view_width;
-
-            snapping_points.push(Snap {
-                view_pos: leftmost_snap,
-                col_idx: first_col_idx,
-            });
-            snapping_points.push(Snap {
-                view_pos: rightmost_snap,
-                col_idx: last_col_idx,
-            });
-
-            let mut push = |col_idx, left, right| {
-                if leftmost_snap < left && left < rightmost_snap {
-                    snapping_points.push(Snap {
-                        view_pos: left,
-                        col_idx,
-                    });
-                }
-
-                let right = right - view_width;
-                if leftmost_snap < right && right < rightmost_snap {
-                    snapping_points.push(Snap {
-                        view_pos: right,
-                        col_idx,
-                    });
-                }
-            };
+            let mut leftmost_snap = None;
+            let mut rightmost_snap = None;
+            let mut col_x = 0.;
 
             for (col_idx, col) in self.columns.iter().enumerate() {
                 if !col.has_visible_tiles() {
                     continue;
                 }
 
-                let (left, right) = snap_points(
-                    self.column_x(col_idx),
-                    col,
-                    prev_interactive_width(col_idx),
-                    next_interactive_width(col_idx),
-                );
-                push(col_idx, left, right);
+                let col_w = col.width();
+                let mode = col.sizing_mode();
+
+                let area = if mode.is_maximized() {
+                    self.parent_area
+                } else {
+                    self.working_area
+                };
+
+                let left_strut = area.loc.x;
+                let right_strut = self.view_size.w - area.size.w - area.loc.x;
+
+                // Normal columns align with the working area, but fullscreen columns align with
+                // the view size.
+                if mode.is_fullscreen() {
+                    let view_pos = col_x;
+                    snapping_points.push(Snap { view_pos, col_idx });
+
+                    if col_idx == first_col_idx {
+                        leftmost_snap = Some(view_pos);
+                    } else if col_idx == last_col_idx {
+                        rightmost_snap = Some(view_pos);
+                    }
+                } else {
+                    // Logic from compute_new_view_offset.
+                    let padding = if mode.is_maximized() {
+                        0.
+                    } else {
+                        ((area.size.w - col_w) / 2.).clamp(0., gaps)
+                    };
+
+                    // Always add the center snap for convenience, especially on ultrawides.
+                    let center = if area.size.w <= col_w {
+                        col_x - left_strut
+                    } else {
+                        col_x - (area.size.w - col_w) / 2. - left_strut
+                    };
+                    snapping_points.push(Snap {
+                        view_pos: center,
+                        col_idx,
+                    });
+
+                    // Initialize our boundary snaps in case the overflowing check is true.
+                    if col_idx == first_col_idx {
+                        leftmost_snap = Some(center);
+                    } else if col_idx == last_col_idx {
+                        rightmost_snap = Some(center);
+                    }
+
+                    let is_overflowing = |adj_col_w: Option<f64>| {
+                        center_on_overflow
+                            && adj_col_w
+                                .filter(|adj_col_w| {
+                                    // NOTE: This logic won't work entirely correctly with small
+                                    // fixed-size maximized windows (they have a different area
+                                    // and padding).
+                                    center_on_overflow
+                                        && adj_col_w + 3.0 * gaps + col_w > area.size.w
+                                })
+                                .is_some()
+                    };
+
+                    let next_col_w = next_interactive_width(col_idx);
+                    if !is_overflowing(next_col_w) {
+                        let view_pos = col_x - padding - left_strut;
+                        snapping_points.push(Snap { view_pos, col_idx });
+
+                        if col_idx == first_col_idx {
+                            leftmost_snap = Some(view_pos);
+                        }
+                    }
+
+                    let prev_col_w = prev_interactive_width(col_idx);
+                    if !is_overflowing(prev_col_w) {
+                        let view_pos = col_x + col_w + padding + right_strut - view_width;
+                        snapping_points.push(Snap { view_pos, col_idx });
+
+                        if col_idx == last_col_idx {
+                            rightmost_snap = Some(view_pos);
+                        }
+                    }
+                }
+
+                col_x += col_w + gaps;
+            }
+
+            // Prevent the gesture from easily snapping further than the first/last column,
+            // as this is generally undesired.
+            if let Some((mut left, mut right)) = Option::zip(leftmost_snap, rightmost_snap) {
+                // If the columns on a workspace total up to less than the workspace width,
+                // left will be > right. In this case, we still want to allow intermediate snaps.
+                if left > right {
+                    std::mem::swap(&mut left, &mut right);
+                }
+
+                // If the user intentionally released the gesture far enough, then allow snapping
+                // past the edge. That is convenient on ultrawides.
+                snapping_points.retain(|snap| {
+                    (current_view_pos < left || left <= snap.view_pos)
+                        && (right < current_view_pos || snap.view_pos <= right)
+                });
             }
         }
 
         // Find the closest snapping point.
         snapping_points.sort_by_key(|snap| NotNan::new(snap.view_pos).unwrap());
 
-        let active_col_x = self.column_x(self.active_column_idx);
-        let target_view_pos = active_col_x + target_view_offset;
         let target_snap = snapping_points
             .iter()
             .min_by_key(|snap| NotNan::new((snap.view_pos - target_view_pos).abs()).unwrap())
@@ -4787,7 +4836,6 @@ impl WindowHeight {
 }
 
 impl<W: LayoutElement> Column<W> {
-    #[allow(clippy::too_many_arguments)]
     fn new_with_tile(
         tile: Tile<W>,
         view_size: Size<f64, Logical>,
@@ -5442,6 +5490,15 @@ impl<W: LayoutElement> Column<W> {
         }
     }
 
+    fn width_px_to_proportion(&self, width_px: f64) -> f64 {
+        let full = self.working_area.size.w - self.options.layout.gaps;
+        if full == 0. {
+            1.
+        } else {
+            (width_px + self.options.layout.gaps + self.extra_size().w) / full
+        }
+    }
+
     fn update_tile_sizes(&mut self, animate: bool) {
         self.update_tile_sizes_with_transaction(animate, Transaction::new());
     }
@@ -5832,7 +5889,7 @@ impl<W: LayoutElement> Column<W> {
         }
     }
 
-    fn move_up(&mut self) -> bool {
+    fn move_up(&mut self, focus: bool) -> bool {
         let new_idx = self.active_tile_idx.saturating_sub(1);
         if self.active_tile_idx == new_idx {
             return false;
@@ -5845,7 +5902,11 @@ impl<W: LayoutElement> Column<W> {
 
         self.tiles.swap(self.active_tile_idx, new_idx);
         self.data.swap(self.active_tile_idx, new_idx);
-        self.active_tile_idx = new_idx;
+        if focus {
+            self.active_tile_idx = new_idx;
+        } else {
+            self.tiles[self.active_tile_idx].ensure_alpha_animates_to_1();
+        }
 
         // Animate the movement.
         let new_active_y = self.tile_offset(new_idx).y;
@@ -5855,7 +5916,7 @@ impl<W: LayoutElement> Column<W> {
         true
     }
 
-    fn move_down(&mut self) -> bool {
+    fn move_down(&mut self, focus: bool) -> bool {
         let new_idx = min(self.active_tile_idx + 1, self.tiles.len() - 1);
         if self.active_tile_idx == new_idx {
             return false;
@@ -5868,7 +5929,11 @@ impl<W: LayoutElement> Column<W> {
 
         self.tiles.swap(self.active_tile_idx, new_idx);
         self.data.swap(self.active_tile_idx, new_idx);
-        self.active_tile_idx = new_idx;
+        if focus {
+            self.active_tile_idx = new_idx;
+        } else {
+            self.tiles[self.active_tile_idx].ensure_alpha_animates_to_1();
+        }
 
         // Animate the movement.
         let new_active_y = self.tile_offset(new_idx).y;
@@ -5978,12 +6043,7 @@ impl<W: LayoutElement> Column<W> {
                 ColumnWidth::Proportion(proportion)
             }
             (ColumnWidth::Fixed(_), SizeChange::AdjustProportion(delta)) => {
-                let full = self.working_area.size.w - self.options.layout.gaps;
-                let current = if full == 0. {
-                    1.
-                } else {
-                    (current_px + self.options.layout.gaps + self.extra_size().w) / full
-                };
+                let current = self.width_px_to_proportion(current_px);
                 let proportion = (current + delta / 100.).clamp(0., MAX_F);
                 ColumnWidth::Proportion(proportion)
             }

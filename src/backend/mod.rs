@@ -184,8 +184,16 @@ impl Backend {
     pub fn set_monitors_active(&mut self, active: bool) {
         match self {
             Backend::Tty(tty) => tty.set_monitors_active(active),
-            Backend::Winit(_) => (),
+            Backend::Winit(winit) => winit.set_monitors_active(active),
             Backend::Headless(_) => (),
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        match self {
+            Backend::Tty(tty) => tty.is_active(),
+            Backend::Winit(_) => true,
+            Backend::Headless(_) => true,
         }
     }
 
@@ -210,6 +218,13 @@ impl Backend {
             Backend::Tty(tty) => tty.on_output_config_changed(niri),
             Backend::Winit(_) => (),
             Backend::Headless(_) => (),
+        }
+    }
+
+    pub fn set_host_cursor_visible(&mut self, visible: bool) {
+        match self {
+            Backend::Winit(winit) => winit.set_cursor_visible(visible),
+            Backend::Tty(_) | Backend::Headless(_) => (),
         }
     }
 

@@ -696,7 +696,8 @@ impl<W: LayoutElement> Workspace<W> {
         if !self.set_grid_focus_for_window(&id) {
             return false;
         }
-        if !self.activate_window_from_grid(&id) {
+        let already_active = self.active_window().map(|window| window.id()) == Some(&id);
+        if !already_active && !self.activate_window_from_grid(&id) {
             return false;
         }
 
@@ -1244,6 +1245,51 @@ impl<W: LayoutElement> Workspace<W> {
         Some(go.window_visual_transform(window, target_pos, target_scale))
     }
 
+    #[cfg(test)]
+    pub(super) fn grid_window_cell_visual_rect(
+        &self,
+        window: &W::Id,
+    ) -> Option<Rectangle<f64, Logical>> {
+        let go = self.grid_overview.as_ref().filter(|go| go.open)?;
+        let item = self.grid_item_for_window(window)?;
+        let (_, info) = go
+            .layout
+            .entries
+            .iter()
+            .find(|(entry, _)| entry.matches_animation_key(&item))?;
+        let (visual_pos, visual_scale) = self.grid_item_visual_transform(go, &item, info);
+        let source_size = info.target_size.downscale(info.target_scale.max(0.0001));
+        Some(Rectangle::new(
+            visual_pos,
+            source_size.upscale(visual_scale),
+        ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn grid_window_preview_visual_rect(
+        &self,
+        window: &W::Id,
+    ) -> Option<Rectangle<f64, Logical>> {
+        let go = self.grid_overview.as_ref().filter(|go| go.open)?;
+        let item = self.grid_item_for_window(window)?;
+        let (_, info) = go
+            .layout
+            .entries
+            .iter()
+            .find(|(entry, _)| entry.matches_animation_key(&item))?;
+        let (visual_pos, visual_scale) = self.grid_item_visual_transform(go, &item, info);
+        let preview = self.scrolling.grid_preview_with_stable_origin(&item)?;
+        let (preview_tile, tile_size) = preview
+            .tiles
+            .into_iter()
+            .find(|preview| preview.tile.window().id() == window)
+            .map(|preview| (preview.pos, preview.tile.tile_size()))?;
+        Some(Rectangle::new(
+            visual_pos + preview_tile.upscale(visual_scale),
+            tile_size.upscale(visual_scale),
+        ))
+    }
+
     fn grid_window_target_visual_transform(
         &self,
         window: &W::Id,
@@ -1658,7 +1704,6 @@ impl<W: LayoutElement> Workspace<W> {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn add_tile(
         &mut self,
         mut tile: Tile<W>,
@@ -1967,9 +2012,19 @@ impl<W: LayoutElement> Workspace<W> {
         });
         toplevel.with_pending_state(|state| {
             if state.states.contains(xdg_toplevel::State::Fullscreen) {
-                state.size = Some(self.view_size.to_i32_round());
+                let size = self.view_size.to_i32_round();
+
+                // We ignore the window's requested min/max here, but still apply our own.
+                let size = rules.apply_max_size(size);
+                let size = rules.apply_min_size(size);
+                state.size = Some(size);
             } else if state.states.contains(xdg_toplevel::State::Maximized) {
-                state.size = Some(self.working_area.size.to_i32_round());
+                let size = self.working_area.size.to_i32_round();
+
+                // We ignore the window's requested min/max here, but still apply our own.
+                let size = rules.apply_max_size(size);
+                let size = rules.apply_min_size(size);
+                state.size = Some(size);
             } else {
                 let size =
                     self.new_window_size(width, height, is_floating, rules, (min_size, max_size));
@@ -2141,60 +2196,60 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
-    pub fn move_left(&mut self) -> bool {
+    pub fn move_left(&mut self, focus: bool) -> bool {
         if self.floating_is_active.get() {
             self.floating.move_left();
             true
         } else {
-            self.scrolling.move_left()
+            self.scrolling.move_left(focus)
         }
     }
 
-    pub fn move_right(&mut self) -> bool {
+    pub fn move_right(&mut self, focus: bool) -> bool {
         if self.floating_is_active.get() {
             self.floating.move_right();
             true
         } else {
-            self.scrolling.move_right()
+            self.scrolling.move_right(focus)
         }
     }
 
-    pub fn move_column_to_first(&mut self) {
+    pub fn move_column_to_first(&mut self, focus: bool) {
         if self.floating_is_active.get() {
             return;
         }
-        self.scrolling.move_column_to_first();
+        self.scrolling.move_column_to_first(focus);
     }
 
-    pub fn move_column_to_last(&mut self) {
+    pub fn move_column_to_last(&mut self, focus: bool) {
         if self.floating_is_active.get() {
             return;
         }
-        self.scrolling.move_column_to_last();
+        self.scrolling.move_column_to_last(focus);
     }
 
-    pub fn move_column_to_index(&mut self, index: usize) {
+    pub fn move_column_to_index(&mut self, index: usize, focus: bool) {
         if self.floating_is_active.get() {
             return;
         }
-        self.scrolling.move_column_to_index(index);
+        self.scrolling.move_column_to_index(index, focus);
     }
 
-    pub fn move_down(&mut self) -> bool {
+    pub fn move_down(&mut self, focus: bool) -> bool {
         if self.floating_is_active.get() {
             self.floating.move_down();
             true
         } else {
-            self.scrolling.move_down()
+            self.scrolling.move_down(focus)
         }
     }
 
-    pub fn move_up(&mut self) -> bool {
+    pub fn move_up(&mut self, focus: bool) -> bool {
         if self.floating_is_active.get() {
             self.floating.move_up();
             true
         } else {
-            self.scrolling.move_up()
+            self.scrolling.move_up(focus)
         }
     }
 
@@ -2230,11 +2285,11 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.expel_from_column();
     }
 
-    pub fn swap_window_in_direction(&mut self, direction: ScrollDirection) {
+    pub fn swap_window_in_direction(&mut self, direction: ScrollDirection, focus: bool) {
         if self.floating_is_active.get() {
             return;
         }
-        self.scrolling.swap_window_in_direction(direction);
+        self.scrolling.swap_window_in_direction(direction, focus);
     }
 
     pub fn toggle_column_tabbed_display(&mut self) {
@@ -3423,15 +3478,18 @@ impl<W: LayoutElement> Workspace<W> {
             let view_rect = Rectangle::new(Point::from((0., 0.)), self.view_size);
             if self.is_floating_visible() && self.options.grid_overview.show_floating_windows {
                 for closing in self.floating.closing_windows() {
-                    let elem = closing.render(ctx.as_gles(), view_rect, Scale::from(scale));
-                    let elem: FloatingSpaceRenderElement<R> = elem.into();
-                    push(elem.into());
+                    if let Some(elem) = closing.render(ctx.as_gles(), view_rect, Scale::from(scale))
+                    {
+                        let elem: FloatingSpaceRenderElement<R> = elem.into();
+                        push(elem.into());
+                    }
                 }
             }
             for closing in self.scrolling.closing_windows() {
-                let elem = closing.render(ctx.as_gles(), view_rect, Scale::from(scale));
-                let elem: ScrollingSpaceRenderElement<R> = elem.into();
-                push(elem.into());
+                if let Some(elem) = closing.render(ctx.as_gles(), view_rect, Scale::from(scale)) {
+                    let elem: ScrollingSpaceRenderElement<R> = elem.into();
+                    push(elem.into());
+                }
             }
         }
     }
@@ -3461,7 +3519,11 @@ impl<W: LayoutElement> Workspace<W> {
             return false;
         }
 
-        self.scrolling.render_above_top_layer()
+        self.scrolling.fullscreen_window_above_top_layer().is_some()
+    }
+
+    pub fn fullscreen_window_above_top_layer(&self) -> Option<&W> {
+        self.scrolling.fullscreen_window_above_top_layer()
     }
 
     pub fn is_floating_visible(&self) -> bool {
@@ -3469,7 +3531,7 @@ impl<W: LayoutElement> Workspace<W> {
         matches!(
             self.floating_is_active,
             FloatingActive::Yes | FloatingActive::NoButRaised
-        ) || !self.render_above_top_layer()
+        ) || self.fullscreen_window_above_top_layer().is_none()
     }
 
     pub fn store_unmap_snapshot_if_empty(
@@ -4007,7 +4069,7 @@ impl<W: LayoutElement> Workspace<W> {
         let source_pos = (pos - visual_pos).downscale(visual_scale.max(0.0001));
         let edge = source_size.w * 0.25;
 
-        match item {
+        let result = match item {
             GridItem::Column { col_idx, .. } => {
                 if source_pos.x < edge {
                     InsertPosition::NewColumn(*col_idx)
@@ -4031,7 +4093,8 @@ impl<W: LayoutElement> Workspace<W> {
                 }
             }
             GridItem::Floating { .. } => InsertPosition::NewColumn(column_count),
-        }
+        };
+        result
     }
 
     fn grid_insert_hint_area_for_item(

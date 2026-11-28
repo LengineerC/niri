@@ -112,6 +112,18 @@ struct StreamParameters {
     size: Option<(i32, i32)>,
 }
 
+/// Properties of the PipeWire stream node, sent with `PipeWireStreamAddedV2`.
+#[derive(Debug, SerializeDict, Type, Value)]
+#[zvariant(signature = "dict")]
+pub struct PipeWireStreamProperties {
+    /// The id of the node.
+    #[zvariant(rename = "node-id")]
+    pub node_id: u32,
+    /// The unique object serial of the node.
+    #[zvariant(rename = "node-serial")]
+    pub node_serial: u64,
+}
+
 pub enum ScreenCastToNiri {
     PickSources(PickSourcesRequest),
     CancelPickSources(PickerRequestId),
@@ -137,12 +149,28 @@ pub enum NodeIdSink {
 }
 
 impl NodeIdSink {
-    pub fn deliver(&self, node_id: u32) -> anyhow::Result<()> {
+    pub fn deliver(&self, node_id: u32, node_serial: u64) -> anyhow::Result<()> {
         match self {
             NodeIdSink::MutterSignal(ctxt) => async_io::block_on(async {
-                Stream::pipe_wire_stream_added(ctxt, node_id)
-                    .await
-                    .context("error sending PipeWireStreamAdded")
+                let v1 = Stream::pipe_wire_stream_added(ctxt, node_id).await;
+                if let Err(err) = &v1 {
+                    warn!("error sending PipeWireStreamAdded: {err:?}");
+                }
+
+                let properties = PipeWireStreamProperties {
+                    node_id,
+                    node_serial,
+                };
+                let v2 = Stream::pipe_wire_stream_added_v2(ctxt, properties).await;
+                if let Err(err) = &v2 {
+                    warn!("error sending PipeWireStreamAddedV2: {err:?}");
+                }
+
+                if v1.is_err() && v2.is_err() {
+                    anyhow::bail!("error sending both PipeWireStreamAdded versions");
+                }
+
+                Ok(())
             }),
             NodeIdSink::Channel(tx) => tx
                 .try_send(node_id)
@@ -217,7 +245,7 @@ impl ScreenCast {
 
     #[zbus(property)]
     async fn version(&self) -> i32 {
-        4
+        5
     }
 }
 
@@ -357,6 +385,12 @@ impl Stream {
     #[zbus(signal)]
     pub async fn pipe_wire_stream_added(ctxt: &SignalEmitter<'_>, node_id: u32)
         -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn pipe_wire_stream_added_v2(
+        ctxt: &SignalEmitter<'_>,
+        properties: PipeWireStreamProperties,
+    ) -> zbus::Result<()>;
 
     #[zbus(property)]
     async fn parameters(&self) -> StreamParameters {

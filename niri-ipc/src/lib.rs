@@ -200,8 +200,15 @@ pub enum Action {
     /// Exit niri.
     Quit {
         /// Skip the "Press Enter to confirm" prompt.
+        #[serde(default)]
         #[cfg_attr(feature = "clap", arg(short, long))]
         skip_confirmation: bool,
+    },
+    /// Change the virtual terminal.
+    ChangeVt {
+        /// Virtual terminal to change to.
+        #[cfg_attr(feature = "clap", arg(required = true))]
+        vt: u8,
     },
     /// Power off all monitors via DPMS.
     PowerOffMonitors {},
@@ -228,6 +235,7 @@ pub enum Action {
     /// Open the screenshot UI.
     Screenshot {
         ///  Whether to show the mouse pointer by default in the screenshot UI.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = true))]
         show_pointer: bool,
 
@@ -249,10 +257,12 @@ pub enum Action {
         /// Write the screenshot to disk in addition to putting it in your clipboard.
         ///
         /// The screenshot is saved according to the `screenshot-path` config setting.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(short = 'd', long, action = clap::ArgAction::Set, default_value_t = true))]
         write_to_disk: bool,
 
         /// Whether to include the mouse pointer in the screenshot.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = true))]
         show_pointer: bool,
 
@@ -280,6 +290,7 @@ pub enum Action {
         /// Write the screenshot to disk in addition to putting it in your clipboard.
         ///
         /// The screenshot is saved according to the `screenshot-path` config setting.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(short = 'd', long, action = clap::ArgAction::Set, default_value_t = true))]
         write_to_disk: bool,
 
@@ -287,6 +298,7 @@ pub enum Action {
         ///
         /// The pointer will be included only if the window is currently receiving pointer input
         /// (usually this means the pointer is on top of the window).
+        #[serde(default)]
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = false))]
         show_pointer: bool,
 
@@ -371,6 +383,75 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Make a window fullscreen.
+    #[cfg_attr(feature = "clap", clap(about = "Make the focused window fullscreen"))]
+    SetWindowFullscreen {
+        /// Id of the window to make fullscreen.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Take a window out of fullscreen.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Take the focused window out of fullscreen")
+    )]
+    UnsetWindowFullscreen {
+        /// Id of the window to take out of fullscreen.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Maximize a window to the screen edges.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Maximize the focused window to the screen edges")
+    )]
+    SetWindowMaximizedToEdges {
+        /// Id of the window to maximize to edges.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Unmaximize a window from the screen edges.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Unmaximize the focused window from the screen edges")
+    )]
+    UnsetWindowMaximizedToEdges {
+        /// Id of the window to unmaximize from edges.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Enable windowed (fake) fullscreen on a window.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Enable windowed (fake) fullscreen on the focused window")
+    )]
+    SetWindowedFullscreen {
+        /// Id of the window to enable windowed fullscreen on.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Disable windowed (fake) fullscreen on a window.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Disable windowed (fake) fullscreen on the focused window")
+    )]
+    UnsetWindowedFullscreen {
+        /// Id of the window to disable windowed fullscreen on.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     /// Focus a window by id.
     FocusWindow {
         /// Id of the window to focus.
@@ -386,7 +467,16 @@ pub enum Action {
         index: u8,
     },
     /// Focus the previously focused window.
-    FocusWindowPrevious {},
+    FocusWindowPrevious {
+        /// Which windows to consider. Defaults to all windows.
+        #[cfg_attr(feature = "clap", arg(long))]
+        #[serde(default)]
+        scope: Option<RecentWindowsScope>,
+        /// Additional filter for the considered windows.
+        #[cfg_attr(feature = "clap", arg(long))]
+        #[serde(default)]
+        filter: Option<RecentWindowsFilter>,
+    },
     /// Focus the column to the left.
     FocusColumnLeft {},
     /// Focus the column to the right.
@@ -440,13 +530,46 @@ pub enum Action {
     /// Focus the window above or the bottommost window.
     FocusWindowUpOrBottom {},
     /// Move the focused column to the left.
-    MoveColumnLeft {},
+    MoveColumnLeft {
+        /// Whether the focus should follow the moved column.
+        ///
+        /// If `true` (the default), the focus will follow the column to the left.
+        /// If `false`, the focus will remain on the original column index.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
     /// Move the focused column to the right.
-    MoveColumnRight {},
+    MoveColumnRight {
+        /// Whether the focus should follow the moved column.
+        ///
+        /// If `true` (the default), the focus will follow the column to the right.
+        /// If `false`, the focus will remain on the original column index.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
     /// Move the focused column to the start of the workspace.
-    MoveColumnToFirst {},
+    MoveColumnToFirst {
+        /// Whether the focus should follow the moved column.
+        ///
+        /// If `true` (the default), the focus will follow the column to the beginning of the
+        /// workspace.
+        /// If `false`, the focus will remain on the original column index.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
     /// Move the focused column to the end of the workspace.
-    MoveColumnToLast {},
+    MoveColumnToLast {
+        /// Whether the focus should follow the moved column.
+        ///
+        /// If `true` (the default), the focus will follow the column to the end of the workspace.
+        /// If `false`, the focus will remain on the original column index.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
     /// Move the focused column to the left or to the monitor to the left.
     MoveColumnLeftOrToMonitorLeft {},
     /// Move the focused column to the right or to the monitor to the right.
@@ -458,11 +581,34 @@ pub enum Action {
         /// The index starts from 1 for the first column.
         #[cfg_attr(feature = "clap", arg())]
         index: usize,
+        /// Whether the focus should follow the moved column.
+        ///
+        /// If `true` (the default), the focus will follow the column to its new index.
+        /// If `false`, the focus will remain on the original column index.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
     },
     /// Move the focused window down in a column.
-    MoveWindowDown {},
+    MoveWindowDown {
+        /// Whether the focus should follow the moved window.
+        ///
+        /// If `true` (the default), the focus will follow the window down.
+        /// If `false`, the focus will remain on the original tile index.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
     /// Move the focused window up in a column.
-    MoveWindowUp {},
+    MoveWindowUp {
+        /// Whether the focus should follow the moved window.
+        ///
+        /// If `true` (the default), the focus will follow the window up.
+        /// If `false`, the focus will remain on the original tile index.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
     /// Move the focused window down in a column or to the workspace below.
     MoveWindowDownOrToWorkspaceDown {},
     /// Move the focused window up in a column or to the workspace above.
@@ -496,9 +642,25 @@ pub enum Action {
     /// Expel the bottom window from the focused column.
     ExpelWindowFromColumn {},
     /// Swap focused window with one to the right.
-    SwapWindowRight {},
+    SwapWindowRight {
+        /// Whether the focus should follow the currently focused window.
+        ///
+        /// If `true` (the default), the focus will follow the window to the right.
+        /// If `false`, the focus will switch to the window coming from the right.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
     /// Swap focused window with one to the left.
-    SwapWindowLeft {},
+    SwapWindowLeft {
+        /// Whether the focus should follow the currently focused window.
+        ///
+        /// If `true` (the default), the focus will follow the window to the left.
+        /// If `false`, the focus will switch to the window coming from the left.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
     /// Toggle the focused column between normal and tabbed display.
     ToggleColumnTabbedDisplay {},
     /// Set the display mode of the focused column.
@@ -541,6 +703,7 @@ pub enum Action {
         ///
         /// If `true` (the default), the focus will follow the window to the new workspace. If
         /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         focus: bool,
     },
@@ -550,6 +713,7 @@ pub enum Action {
         ///
         /// If `true` (the default), the focus will follow the window to the new workspace. If
         /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         focus: bool,
     },
@@ -574,6 +738,87 @@ pub enum Action {
         /// If `true` (the default) and the window to move is focused, the focus will follow the
         /// window to the new workspace. If `false`, the focus will remain on the original
         /// workspace.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
+    /// Move the focused window to a new workspace below a workspace.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Move the focused window to a new workspace below the focused workspace")
+    )]
+    MoveWindowToNewWorkspaceBelow {
+        /// Reference (index or name) of the workspace below which to put the new window.
+        ///
+        /// If `None`, uses the focused workspace.
+        #[cfg_attr(feature = "clap", arg())]
+        reference: Option<WorkspaceReferenceArg>,
+
+        /// Whether the focus should follow the moved window.
+        ///
+        /// If `true` (the default), the focus will follow the window to the new workspace. If
+        /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
+    /// Move the focused window to a new workspace above a workspace.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Move the focused window to a new workspace above the focused workspace")
+    )]
+    MoveWindowToNewWorkspaceAbove {
+        /// Reference (index or name) of the workspace above which to put the new window.
+        ///
+        /// If `None`, uses the focused workspace.
+        #[cfg_attr(feature = "clap", arg())]
+        reference: Option<WorkspaceReferenceArg>,
+
+        /// Whether the focus should follow the moved window.
+        ///
+        /// If `true` (the default), the focus will follow the window to the new workspace. If
+        /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
+    /// Move the focused column to a new workspace below a workspace.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Move the focused column to a new workspace below the focused workspace")
+    )]
+    MoveColumnToNewWorkspaceBelow {
+        /// Reference (index or name) of the workspace below which to put the new column.
+        ///
+        /// If `None`, uses the focused workspace.
+        #[cfg_attr(feature = "clap", arg())]
+        reference: Option<WorkspaceReferenceArg>,
+
+        /// Whether the focus should follow the moved column.
+        ///
+        /// If `true` (the default), the focus will follow the column to the new workspace. If
+        /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
+    /// Move the focused column to a new workspace above a workspace.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Move the focused column to a new workspace above the focused workspace")
+    )]
+    MoveColumnToNewWorkspaceAbove {
+        /// Reference (index or name) of the workspace above which to put the new column.
+        ///
+        /// If `None`, uses the focused workspace.
+        #[cfg_attr(feature = "clap", arg())]
+        reference: Option<WorkspaceReferenceArg>,
+
+        /// Whether the focus should follow the moved column.
+        ///
+        /// If `true` (the default), the focus will follow the column to the new workspace. If
+        /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         focus: bool,
     },
@@ -583,6 +828,7 @@ pub enum Action {
         ///
         /// If `true` (the default), the focus will follow the column to the new workspace. If
         /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         focus: bool,
     },
@@ -592,6 +838,7 @@ pub enum Action {
         ///
         /// If `true` (the default), the focus will follow the column to the new workspace. If
         /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         focus: bool,
     },
@@ -605,6 +852,7 @@ pub enum Action {
         ///
         /// If `true` (the default), the focus will follow the column to the new workspace. If
         /// `false`, the focus will remain on the original workspace.
+        #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         focus: bool,
     },
@@ -902,6 +1150,7 @@ pub enum Action {
         id: Option<u64>,
 
         /// How to change the X position.
+        #[serde(default = "default_position_change")]
         #[cfg_attr(
             feature = "clap",
             arg(short, long, default_value = "+0", allow_hyphen_values = true)
@@ -909,6 +1158,7 @@ pub enum Action {
         x: PositionChange,
 
         /// How to change the Y position.
+        #[serde(default = "default_position_change")]
         #[cfg_attr(
             feature = "clap",
             arg(short, long, default_value = "+0", allow_hyphen_values = true)
@@ -1012,6 +1262,11 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         path: Option<String>,
     },
+    /// Force-send frame callbacks to all windows.
+    ///
+    /// Can be useful to get currently-invisible windows to redraw,
+    /// e.g. after changing between light and dark style.
+    ForceSendFrameCallbacks {},
 }
 
 /// Change in window or column size.
@@ -1269,6 +1524,7 @@ pub struct VrrToSet {
     )]
     pub vrr: bool,
     /// Only enable when the output shows a window matching the variable-refresh-rate window rule.
+    #[serde(default)]
     #[cfg_attr(feature = "clap", arg(long))]
     pub on_demand: bool,
 }
@@ -1337,6 +1593,30 @@ pub struct LogicalOutput {
     pub scale: f64,
     /// Transform.
     pub transform: Transform,
+}
+
+/// Which windows to consider when picking a recently focused window.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum RecentWindowsScope {
+    /// All windows.
+    All,
+    /// Windows on the active output.
+    Output,
+    /// Windows on the active workspace.
+    Workspace,
+}
+
+/// Additional filter for the windows considered when picking a recently focused window.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum RecentWindowsFilter {
+    /// All windows.
+    All,
+    /// Windows with the same app id as the focused window.
+    AppId,
 }
 
 /// Output transform, which goes counter-clockwise.
@@ -1658,7 +1938,18 @@ pub enum CastKind {
     ///
     /// A client capturing both an output and the cursor creates two sessions, which are reported
     /// as two `Cast`s sharing one [`session_id`](Cast::session_id).
+    ///
+    /// A session is reported once it requests its second frame. Sessions requesting only one
+    /// frame are treated as regular screenshots (e.g. grim) and not reported as screencasts.
     ExtImageCopyCapture,
+    /// ext-image-copy-capture protocol cursor screencast.
+    ///
+    /// `Cast`s of this kind show the image of the cursor and cursor position. Their
+    /// [`target`](Cast::target) indicates the output or window that the cursor is captured over.
+    ///
+    /// Like [`ExtImageCopyCapture`](CastKind::ExtImageCopyCapture), reported once the session
+    /// requests its second frame.
+    ExtImageCopyCaptureCursor,
 }
 
 /// Target of a screencast.
@@ -2192,6 +2483,14 @@ impl OutputAction {
             _ => Ok(()),
         }
     }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_position_change() -> PositionChange {
+    PositionChange::AdjustFixed(0.)
 }
 
 #[cfg(test)]

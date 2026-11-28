@@ -113,16 +113,7 @@ impl SeatHandler for State {
     }
 
     fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: keyboard::LedState) {
-        let keyboards = self
-            .niri
-            .devices
-            .iter()
-            .filter(|device| device.has_capability(input::DeviceCapability::Keyboard))
-            .cloned();
-
-        for mut keyboard in keyboards {
-            keyboard.led_update(led_state.into());
-        }
+        self.update_keyboard_leds(led_state);
     }
 
     fn click_grab(
@@ -254,11 +245,20 @@ impl InputMethodHandler for State {
     fn popup_repositioned(&mut self, surface: PopupSurface) {
         let popup = PopupKind::InputMethod(surface);
         self.unconstrain_popup(&popup);
+
+        if let Some(output) = self.output_for_popup(&popup) {
+            self.niri.queue_redraw(&output.clone());
+        }
     }
 
     fn dismiss_popup(&mut self, surface: PopupSurface) {
         if let Some(parent) = surface.get_parent().map(|parent| parent.surface.clone()) {
-            let _ = PopupManager::dismiss_popup(&parent, &PopupKind::from(surface));
+            let popup = PopupKind::InputMethod(surface);
+            if let Some(output) = self.output_for_popup(&popup) {
+                self.niri.queue_redraw(&output.clone());
+            }
+
+            let _ = PopupManager::dismiss_popup(&parent, &popup);
         }
     }
 
@@ -800,6 +800,12 @@ impl XdgActivationHandler for State {
 
         let pointer_last_enter = seat.get_pointer().unwrap().last_enter();
         if pointer_last_enter.is_some_and(|last_enter| serial.is_no_older_than(&last_enter)) {
+            return true;
+        }
+
+        // Touch has no enter event, so check against the last touch down instead.
+        let touch_last_down = seat.get_touch().and_then(|touch| touch.last_down());
+        if touch_last_down.is_some_and(|last_down| serial.is_no_older_than(&last_down)) {
             return true;
         }
 
