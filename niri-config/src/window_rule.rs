@@ -84,6 +84,7 @@ pub struct WindowRule {
     pub tiled_state: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub ignore_grid_overview: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
     pub offscreen_fps: Option<FloatOrInt<0, 30>>,
     #[knuffel(child, default)]
     pub background_effect: BackgroundEffectRule,
